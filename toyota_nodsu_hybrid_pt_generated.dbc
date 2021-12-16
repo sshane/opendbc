@@ -85,6 +85,12 @@ BO_ 467 PCM_CRUISE_2: 8 XXX
  SG_ SET_SPEED : 23|8@0+ (1,0) [0|255] "kph" XXX
  SG_ CHECKSUM : 63|8@0+ (1,0) [0|255] "" XXX
 
+BO_ 865 PCM_BUTTONS : 8 PCM
+ SG_ RES_BTN : 5|1@0+ (1,0) [0|0] "" XXX
+ SG_ SET_BTN : 4|1@0+ (1,0) [0|0] "" XXX
+ SG_ CANCEL_BTN : 3|1@0+ (1,0) [0|0] "" XXX
+ SG_ MAIN_ON : 2|1@0+ (1,0) [0|0] "" XXX
+
 BO_ 552 ACCELEROMETER: 8 XXX
  SG_ ACCEL_Z : 22|15@0- (1,0) [0|32767] "" XXX
  SG_ ACCEL_X : 6|15@0- (0.001,0) [-20|20] "m/s2" XXX
