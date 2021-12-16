@@ -84,6 +84,7 @@ BO_ 467 PCM_CRUISE_2: 8 XXX
  SG_ LOW_SPEED_LOCKOUT : 14|2@0+ (1,0) [0|3] "kph" XXX
  SG_ SET_SPEED : 23|8@0+ (1,0) [0|255] "kph" XXX
  SG_ CHECKSUM : 63|8@0+ (1,0) [0|255] "" XXX
+ SG_ WSTL2 : 3|1@0+ (1,0) [0|0] "" DS1
 
 BO_ 865 PCM_BUTTONS : 8 PCM
  SG_ RES_BTN : 5|1@0+ (1,0) [0|0] "" XXX
@@ -146,6 +147,7 @@ BO_ 835 ACC_CONTROL: 8 DSU
  SG_ CHECKSUM : 63|8@0+ (1,0) [0|255] "" XXX
  SG_ ACCEL_CMD_ALT : 47|8@0- (0.05,0) [0|0] "m/s^2" XXX
  SG_ RADAR_DIRTY : 19|1@0+ (1,0) [0|1] "" XXX
+ SG_ LVSTP : 29|1@0+ (1,0) [0|0] "" Vector__XXX
 
 BO_ 836 PRE_COLLISION_2: 8 DSU
  SG_ CHECKSUM : 63|8@0+ (1,0) [0|0] "" XXX
