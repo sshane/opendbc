@@ -102,6 +102,7 @@ BO_ 614 STEERING_IPAS: 8 IPAS
  SG_ SET_ME_X00_1 : 55|8@0+ (1,0) [0|255] "" XXX
  SG_ CHECKSUM : 63|8@0+ (1,0) [0|255] "" XXX
 
+
 BO_ 643 PRE_COLLISION: 7 DSU
  SG_ COUNTER : 7|8@0+ (1,0) [0|255] "" XXX
  SG_ SET_ME_X00 : 15|8@0+ (1,0) [0|255] "" XXX
@@ -112,6 +113,15 @@ BO_ 643 PRE_COLLISION: 7 DSU
  SG_ SET_ME_X003 : 40|1@0+ (1,0) [0|1] "" XXX
  SG_ PRECOLLISION_ACTIVE : 41|1@0+ (1,0) [0|255] "" XXX
  SG_ CHECKSUM : 55|8@0+ (1,0) [0|255] "" XXX
+ SG_ DSLCCW1 : 15|1@0+ (1,0) [0|0] "" FCM
+ SG_ DSSTPBZ : 14|1@0+ (1,0) [0|0] "" FCM
+ SG_ PBRTRGR2 : 12|1@0+ (1,0) [0|0] "" Vector__XXX
+ SG_ DSSFTRQD : 11|4@0+ (1,0) [0|0] "" Vector__XXX
+ SG_ DSBHOK : 33|1@0+ (1,0) [0|0] "" Vector__XXX
+ SG_ PPTRGR2 : 32|1@0+ (1,0) [0|0] "" Vector__XXX
+ SG_ DSRQBH : 47|2@0+ (1,0) [0|0] "" Vector__XXX
+ SG_ IBTRGR2 : 45|1@0+ (1,0) [0|0] "" Vector__XXX
+ SG_ PCSABK2 : 44|1@0+ (1,0) [0|0] "" Vector__XXX
 
 BO_ 740 STEERING_LKA: 5 XXX
  SG_ LKA_STATE : 31|8@0+ (1,0) [0|255] "" XXX
