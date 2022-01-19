@@ -476,6 +476,8 @@ CM_ SG_ 550 BRAKE_PRESSURE "seems prop to pedal force";
 CM_ SG_ 550 BRAKE_POSITION "seems proportional to pedal displacement, unclear the max value of 0x1c8";
 CM_ SG_ 610 TYPE "seems 1 on Corolla, 0 on all others";
 VAL_ 956 GEAR 0 "D" 1 "S" 8 "N" 16 "R" 32 "P";
+VAL_ 956 SPORT_ON 0 "off" 1 "on";
+VAL_ 956 ECON_ON 0 "off" 1 "on";
 CM_ SG_ 1014 L_ADJACENT "vehicle adjacent left side of car. enabled above 10mph, regardless of ADJACENT_ENABLED or APPROACHING_ENABLED";
 CM_ SG_ 1014 L_APPROACHING "vehicle approaching from left side of car. enabled above 10mph, regardless of ADJACENT_ENABLED or APPROACHING_ENABLED";
 CM_ SG_ 1014 R_ADJACENT "vehicle adjacent right side of car. enabled above 10mph, regardless of ADJACENT_ENABLED or APPROACHING_ENABLED";
@@ -490,7 +492,14 @@ CM_ "toyota_nodsu_hybrid_pt.dbc starts here";
 
 
 
+BO_ 295 GEAR_PACKET_HYBRID: 8 XXX
+ SG_ CAR_MOVEMENT : 39|8@0- (1,0) [0|255] "" XXX
+ SG_ COUNTER : 55|8@0+ (1,0) [0|255] "" XXX
+ SG_ CHECKSUM : 63|8@0+ (1,0) [0|255] "" XXX
+ SG_ GEAR : 47|4@0+ (1,0) [0|15] "" XXX
+
 BO_ 581 GAS_PEDAL: 8 XXX
  SG_ GAS_PEDAL : 23|8@0+ (0.005,0) [0|1] "" XXX
 
 CM_ SG_ 581 GAS_PEDAL "it seems slightly filtered";
+VAL_ 295 GEAR 0 "P" 1 "R" 2 "N" 3 "D" 4 "B";
