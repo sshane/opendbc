@@ -33,16 +33,7 @@ class Message:
     return self.title
 
 
-def is_message(line):
-  return line.startswith("BO_ ")
-
-def msgs_equal(msg1, msg2):
-  name_check = msg1[0][0] == msg2[0][0]
-  len_check = msg1[0][1] == msg2[0][1]
-  return sig1 == sig2
-
-
-platform = "toyota"
+platform = "honda"
 platform_dir = os.path.join(opendbc_root, 'generator', platform)
 common_dbc = os.path.join(platform_dir, "_comma.dbc")
 
@@ -117,7 +108,7 @@ if __name__ == "__main__":
   common_msgs_to_add = {msg: dbcs for msg, dbcs in common_msgs.items() if msg not in base_dbc}
   print(common_msgs_to_add)
   print(new_dbcs)
-  print('\n')
+  print()
   # raise Exception
 
   for msg, dbcs in common_msgs_to_add.items():
@@ -125,84 +116,61 @@ if __name__ == "__main__":
       print('adding {} to {}'.format(msg, dbc))
       new_dbcs[dbc].add(msg)
 
-  # raise Exception
-
-  # for msg, dbcs in common_msgs_to_add.items():
-  #   # if msg.name == "BRAKE_MODULE":
-  #   #   continue
-  #   # print(msg, base_dbc)
-  #   # print(type(dbcs))
-  #   added_to_a_dbc = False
-  #   for new_dbc, new_dbc_msgs in new_dbcs.items():
-  #     good_to_go = True
-  #     for other_msg in new_dbc_msgs:
-  #       # if msg.name == "EPS_STATUS":
-  #       print('new dbc: {}'.format(new_dbc))
-  #       print("this: {} {}, other: {} {}, ={}".format(msg, dbcs, other_msg, messages_to_dbc[other_msg], all([this_dbc in messages_to_dbc[other_msg] for this_dbc in dbcs])))
-  #       good_to_go = good_to_go and all([this_dbc in messages_to_dbc[other_msg] for this_dbc in dbcs])
-  #
-  #     # checked all msgs in new prospective DBC
-  #     if good_to_go:
-  #       # if msg.name in ["EPS_STATUS", ]:  # EPS_STATUS
-  #       print('adding {} to {}'.format(msg, new_dbc))
-  #       new_dbcs[new_dbc].add(msg)
-  #       added_to_a_dbc = True
-  #       # break
-  #   if not added_to_a_dbc:
-  #     print('making new DBC for {} (was adding to {})'.format(msg, new_dbc))
-  #     new_dbcs[f"new_dbc{len(new_dbcs)}"].add(msg)
-  #   print()
-
   new_dbcs = dict(new_dbcs)
-  # print(len)
+  print('\nCollapsed to {} DBCs'.format(len(new_dbcs)))
+  print('1 base DBC with {} messages'.format(len(base_dbc)))
+
   # raise Exception
-  #
-  # Perform sanity check
-  in_new_dbcs = True
-  for msg, dbcs in messages_to_dbc.items():
-    if msg in base_dbc:
-      continue
-    print(msg)
-    for new_dbc_msgs in new_dbcs.values():
-      print(type(msg), len(new_dbc_msgs))
-      in_new_dbcs = in_new_dbcs and msg in new_dbc_msgs
-  assert in_new_dbcs, "Not all messages are in the new DBCs"
-  #
-  # raise Exception
-  #
-  # new_dbcs = {}
-  # # new_dbcs = []
-  # duplicates = 0
-  # for msg, this_dbcs in common_msgs.items():
-  #   if len(new_dbcs) == 0:
-  #     new_dbcs[f'dbc{len(new_dbcs)}'] = [msg]
-  #     print("HERE")
+
+  # # print(len)
+  # # raise Exception
+  # #
+  # # Perform sanity check
+  # in_new_dbcs = True
+  # for msg, dbcs in messages_to_dbc.items():
+  #   if msg in base_dbc:
   #     continue
-  #
-  #   in_any = False
-  #   for new_dbc, new_dbc_msgs in new_dbcs.items():
-  #     all_in = True
-  #     for new_dbc_msg in new_dbc_msgs:
-  #       all_in = all_in and all([dbc in this_dbcs for dbc in common_msgs[new_dbc_msg]])
-  #     print(all_in)
-  #     if all_in:
-  #       new_dbcs[new_dbc].append(msg)
-  #       in_any = True
-  #       break
-  #
-  #   if not in_any:
-  #     new_dbcs[f'dbc{len(new_dbcs)}'] = [msg]
-  #
-  #     # print(new_dbc_msgs)
-  #     # for this_msg_dbc in this_dbcs:
-  #     #   all_in = all_in and this_msg_dbc in this_dbcs
-  #     # print(all_in)
-  #
-  # #   for msg_2, dbcs_2 in common_msgs.items():
-  # #     if msg == msg_2:
-  # #       continue
-  # #     if dbcs == dbcs_2:
-  # #       duplicates += 1
-  # #       new_dbcs.append(dbcs)
-  # #   # print(msg, dbcs)
-  # # print(duplicates)
+  #   print(msg)
+  #   for new_dbc_msgs in new_dbcs.values():
+  #     print(type(msg), len(new_dbc_msgs))
+  #     in_new_dbcs = in_new_dbcs and msg in new_dbc_msgs
+  # assert in_new_dbcs, "Not all messages are in the new DBCs"
+  # #
+  # # raise Exception
+  # #
+  # # new_dbcs = {}
+  # # # new_dbcs = []
+  # # duplicates = 0
+  # # for msg, this_dbcs in common_msgs.items():
+  # #   if len(new_dbcs) == 0:
+  # #     new_dbcs[f'dbc{len(new_dbcs)}'] = [msg]
+  # #     print("HERE")
+  # #     continue
+  # #
+  # #   in_any = False
+  # #   for new_dbc, new_dbc_msgs in new_dbcs.items():
+  # #     all_in = True
+  # #     for new_dbc_msg in new_dbc_msgs:
+  # #       all_in = all_in and all([dbc in this_dbcs for dbc in common_msgs[new_dbc_msg]])
+  # #     print(all_in)
+  # #     if all_in:
+  # #       new_dbcs[new_dbc].append(msg)
+  # #       in_any = True
+  # #       break
+  # #
+  # #   if not in_any:
+  # #     new_dbcs[f'dbc{len(new_dbcs)}'] = [msg]
+  # #
+  # #     # print(new_dbc_msgs)
+  # #     # for this_msg_dbc in this_dbcs:
+  # #     #   all_in = all_in and this_msg_dbc in this_dbcs
+  # #     # print(all_in)
+  # #
+  # # #   for msg_2, dbcs_2 in common_msgs.items():
+  # # #     if msg == msg_2:
+  # # #       continue
+  # # #     if dbcs == dbcs_2:
+  # # #       duplicates += 1
+  # # #       new_dbcs.append(dbcs)
+  # # #   # print(msg, dbcs)
+  # # # print(duplicates)
