@@ -1,11 +1,9 @@
 #!/usr/bin/env python3
 from __future__ import print_function
 import os
-import re
 
 from collections import defaultdict
 from opendbc.can.dbc import dbc as dbc_helper  # TODO: use this
-from opendbc.generator.generator import read_dbc
 
 cur_path = os.path.dirname(os.path.realpath(__file__))
 opendbc_root = os.path.join(cur_path, '../')
@@ -20,10 +18,8 @@ class Message:
     self.title = f"{addr} {self.name}: {self.len}"  # addr, name, msg length. quick and dirty check
 
   def __eq__(self, other):
-    # TODO: take into account signal start bits
     sig_check = all([sig_start_bit == other.sigs[sig_name] for sig_name, sig_start_bit in
                      self.sigs.items() if sig_name in other.sigs])
-    # print(self.title, sig_check)
     return self.title == other.title and sig_check
 
   def __hash__(self):
@@ -31,6 +27,20 @@ class Message:
 
   def __repr__(self):
     return self.title
+
+
+def get_base_dbcs(_common_msgs, _len_orig_dbcs):
+  # create base DBCs that are supersets of all common signals
+  base_dbcs = []  # list of lists of messages
+  n = _len_orig_dbcs
+  while n >= 0:
+    print('n', n)
+    print('len', len(base_dbcs))
+    msgs = [msg for msg, dbcs in _common_msgs.items() if len(dbcs) == n]
+    if len(msgs):
+      base_dbcs.append(msgs)
+    n -= 1
+  return base_dbcs
 
 
 platform = "honda"
@@ -41,8 +51,6 @@ if __name__ == "__main__":
   common_comma_msgs = []
   if os.path.exists(common_dbc):
     common_comma_msgs = [Message(addr, msg) for addr, msg in dbc_helper(common_dbc).msgs.items()]
-  # common_honda_msgs = [Message(addr, msg).title for addr, msg in dbc_helper(os.path.join(honda_dir, "_comma.dbc")).msgs.items()]
-  # print(common_honda_msgs)
 
   dbc_to_messages = {}
   messages_to_dbc = defaultdict(set)
@@ -81,17 +89,8 @@ if __name__ == "__main__":
   # common_msgs excludes common defined but includes DBCs that don't have any conflicts for including that message
   common_msgs = dict(common_msgs)
 
-
-  # print(common_sigs)
-
   # first create base DBC that is a superset of all common signals
-  base_dbc = []  # holds messages
-  for msg, dbcs in common_msgs.items():
-    if len(dbcs) == len_orig_dbcs:
-      base_dbc.append(msg)
-      # # common here (as above) means either duplicate, or it doesn't conflict with another address or name
-      # print('Message common across all DBCs: {}'.format(msg))
-  # print('Base DBC (len: {}): {}'.format(len(base_dbc), base_dbc))
+  base_dbc = get_base_dbcs(common_msgs, len_orig_dbcs)[0]
 
   new_dbcs = defaultdict(set)
 
@@ -99,17 +98,14 @@ if __name__ == "__main__":
     if msg in base_dbc:
       continue
     if len(dbcs) == 1:  # message isn't common with anything, need a new DBC :(
-      # print(msg, dbcs)
       new_dbcs[list(dbcs)[0]].add(msg)
 
   print('Need a minimum of {} DBCs'.format(len(new_dbcs)))
-  # raise Exception
 
   common_msgs_to_add = {msg: dbcs for msg, dbcs in common_msgs.items() if msg not in base_dbc}
   print(common_msgs_to_add)
   print(new_dbcs)
   print()
-  # raise Exception
 
   for msg, dbcs in common_msgs_to_add.items():
     for dbc in dbcs:
@@ -120,11 +116,6 @@ if __name__ == "__main__":
   print('\nCollapsed to {} DBCs'.format(len(new_dbcs)))
   print('1 base DBC with {} messages'.format(len(base_dbc)))
 
-  # raise Exception
-
-  # # print(len)
-  # # raise Exception
-  # #
   # # Perform sanity check
   # in_new_dbcs = True
   # for msg, dbcs in messages_to_dbc.items():
@@ -135,42 +126,3 @@ if __name__ == "__main__":
   #     print(type(msg), len(new_dbc_msgs))
   #     in_new_dbcs = in_new_dbcs and msg in new_dbc_msgs
   # assert in_new_dbcs, "Not all messages are in the new DBCs"
-  # #
-  # # raise Exception
-  # #
-  # # new_dbcs = {}
-  # # # new_dbcs = []
-  # # duplicates = 0
-  # # for msg, this_dbcs in common_msgs.items():
-  # #   if len(new_dbcs) == 0:
-  # #     new_dbcs[f'dbc{len(new_dbcs)}'] = [msg]
-  # #     print("HERE")
-  # #     continue
-  # #
-  # #   in_any = False
-  # #   for new_dbc, new_dbc_msgs in new_dbcs.items():
-  # #     all_in = True
-  # #     for new_dbc_msg in new_dbc_msgs:
-  # #       all_in = all_in and all([dbc in this_dbcs for dbc in common_msgs[new_dbc_msg]])
-  # #     print(all_in)
-  # #     if all_in:
-  # #       new_dbcs[new_dbc].append(msg)
-  # #       in_any = True
-  # #       break
-  # #
-  # #   if not in_any:
-  # #     new_dbcs[f'dbc{len(new_dbcs)}'] = [msg]
-  # #
-  # #     # print(new_dbc_msgs)
-  # #     # for this_msg_dbc in this_dbcs:
-  # #     #   all_in = all_in and this_msg_dbc in this_dbcs
-  # #     # print(all_in)
-  # #
-  # # #   for msg_2, dbcs_2 in common_msgs.items():
-  # # #     if msg == msg_2:
-  # # #       continue
-  # # #     if dbcs == dbcs_2:
-  # # #       duplicates += 1
-  # # #       new_dbcs.append(dbcs)
-  # # #   # print(msg, dbcs)
-  # # # print(duplicates)
