@@ -29,21 +29,19 @@ class Message:
     return self.title
 
 
-def get_base_dbcs(_common_msgs, _len_orig_dbcs):
+def get_base_dbcs(_messages_to_dbc, _len_orig_dbcs):
   # create base DBCs that are supersets of all common signals
   base_dbcs = []  # list of lists of messages
   n = _len_orig_dbcs
   while n >= 0:
-    print('n', n)
-    print('len', len(base_dbcs))
-    msgs = [msg for msg, dbcs in _common_msgs.items() if len(dbcs) == n]
+    msgs = [msg for msg, dbcs in _messages_to_dbc.items() if len(dbcs) == n]
     if len(msgs):
       base_dbcs.append(msgs)
     n -= 1
   return base_dbcs
 
 
-platform = "honda"
+platform = "toyota"
 platform_dir = os.path.join(opendbc_root, 'generator', platform)
 common_dbc = os.path.join(platform_dir, "_comma.dbc")
 
@@ -72,25 +70,31 @@ if __name__ == "__main__":
   # dict map of msg to all dbc's that contain it without conflict (either exists or doesn't with no conflicts)
   common_msgs = defaultdict(set)
   for dbc_fn, msgs in dbc_to_messages.items():
+
     for dbc_fn_2, msgs_2 in dbc_to_messages.items():
       if dbc_fn == dbc_fn_2:
         continue
+
+      # print(msgs)
+
       for msg in msgs:
         if msg in common_comma_msgs:
           continue
         common_msgs[msg].add(dbc_fn)
-        duplicate_msg = msg.title in [s.title for s in msgs_2]
+        duplicate_msg = msg in msgs_2
         msg_exists = msg.name in [s.name for s in msgs_2] or msg.addr in [s.addr for s in msgs_2]
-        if duplicate_msg or not msg_exists:  # if duplicate or doesn't exist (okay to create superset)
+        # msg_exists = msg in msgs_2
+        if duplicate_msg:# or not msg_exists:  # if duplicate or doesn't exist (okay to create superset)
           # print('adding', msg)
           common_msgs[msg].add(dbc_fn_2)
 
   # messages_to_dbc contains all (even defined common),
   # common_msgs excludes common defined but includes DBCs that don't have any conflicts for including that message
   common_msgs = dict(common_msgs)
+  # raise Exception
 
   # first create base DBC that is a superset of all common signals
-  base_dbc = get_base_dbcs(common_msgs, len_orig_dbcs)[0]
+  base_dbc = get_base_dbcs(messages_to_dbc, len_orig_dbcs)[0]
 
   new_dbcs = defaultdict(set)
 
@@ -103,14 +107,42 @@ if __name__ == "__main__":
   print('Need a minimum of {} DBCs'.format(len(new_dbcs)))
 
   common_msgs_to_add = {msg: dbcs for msg, dbcs in common_msgs.items() if msg not in base_dbc}
-  print(common_msgs_to_add)
-  print(new_dbcs)
+  # print(common_msgs_to_add)
+  # print(new_dbcs)
   print()
 
+  # for msg, dbcs in common_msgs_to_add.items():
+  #   for dbc in dbcs:
+  #     # print('adding {} to {}'.format(msg, dbc))
+  #     new_dbcs[dbc].add(msg)
+
   for msg, dbcs in common_msgs_to_add.items():
-    for dbc in dbcs:
-      print('adding {} to {}'.format(msg, dbc))
-      new_dbcs[dbc].add(msg)
+    # if msg.name == "BRAKE_MODULE":
+    #   continue
+    # print(msg, base_dbc)
+    # print(type(dbcs))
+    added_to_a_dbc = False
+    for new_dbc, new_dbc_msgs in new_dbcs.items():
+      good_to_go = True
+      for other_msg in new_dbc_msgs:
+        # if msg.name == "EPS_STATUS":
+        print('new dbc: {}'.format(new_dbc))
+        print("this: {} {}, other: {} {}, ={}".format(msg, dbcs, other_msg, messages_to_dbc[other_msg], any([dbc in dbcs for dbc in messages_to_dbc[other_msg]])))
+        # good_to_go = good_to_go and all([this_dbc in messages_to_dbc[other_msg] for this_dbc in dbcs])
+        good_to_go = good_to_go and any([dbc in dbcs for dbc in messages_to_dbc[other_msg]])
+        print(good_to_go)
+
+      # checked all msgs in new prospective DBC
+      if good_to_go:
+        # if msg.name in ["EPS_STATUS", ]:  # EPS_STATUS
+        print('adding {} to {}'.format(msg, new_dbc))
+        new_dbcs[new_dbc].add(msg)
+        added_to_a_dbc = True
+        # break
+    if not added_to_a_dbc:
+      print('making new DBC for {} (was adding to {})'.format(msg, new_dbc))
+      new_dbcs[f"new_dbc{len(new_dbcs)}"].add(msg)
+    print()
 
   new_dbcs = dict(new_dbcs)
   print('\nCollapsed to {} DBCs'.format(len(new_dbcs)))
