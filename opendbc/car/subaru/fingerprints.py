@@ -309,6 +309,11 @@ FW_VERSIONS = {
       b'\x1b\xa7@a\x00',
     ],
   },
+  CAR.SUBARU_BRZ_6MT_2024: {
+    (Ecu.fwdCamera, 0x787, None): [
+      b'\x00\x00e\xb4\x00\x00\x00\x00\x00\x00',
+    ],
+  },
   CAR.SUBARU_FORESTER_PREGLOBAL: {
     (Ecu.abs, 0x7b0, None): [
       b'm\x97\x14@',

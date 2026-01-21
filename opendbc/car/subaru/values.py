@@ -57,6 +57,7 @@ class SubaruSafetyFlags(IntFlag):
   GEN2 = 1
   LONG = 2
   PREGLOBAL_REVERSED_DRIVER_TORQUE = 4
+  MANUAL = 8
 
 
 class SubaruFlags(IntFlag):
@@ -73,6 +74,7 @@ class SubaruFlags(IntFlag):
   PREGLOBAL = 16
   HYBRID = 32
   LKAS_ANGLE = 64
+  MANUAL = 128  # ACC but no steering
 
 
 GLOBAL_ES_ADDR = 0x787
@@ -169,6 +171,11 @@ class CAR(Platforms):
     [SubaruCarDocs("Subaru Forester Hybrid 2020")],
     SUBARU_FORESTER.specs,
     flags=SubaruFlags.HYBRID,
+  )
+  SUBARU_BRZ_6MT_2024 = SubaruGen2PlatformConfig(
+    [SubaruCarDocs("Subaru BRZ 6MT 2024", "All")],
+    CarSpecs(mass=1300, wheelbase=2.57, steerRatio=13.5),
+    flags=SubaruFlags.MANUAL,
   )
   # Pre-global
   SUBARU_FORESTER_PREGLOBAL = SubaruPlatformConfig(
