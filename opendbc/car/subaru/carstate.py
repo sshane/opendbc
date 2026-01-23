@@ -60,6 +60,9 @@ class CarState(CarStateBase):
       cp_transmission = cp_alt if self.CP.flags & SubaruFlags.HYBRID else cp
       can_gear = int(cp_transmission.vl["Transmission"]["Gear"])
       ret.gearShifter = self.parse_gear_shifter(self.shifter_values.get(can_gear, None))
+    else:
+      # TODO: detect neutral
+      ret.gearShifter = structs.CarState.GearShifter.drive
 
     # TODO: find, this sucks
     if not self.CP.flags & SubaruFlags.MANUAL:
