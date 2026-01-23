@@ -74,6 +74,8 @@ class CarState(CarStateBase):
 
       ret.steeringTorque = cp.vl["Steering_Torque"]["Steer_Torque_Sensor"]
       ret.steeringTorqueEps = cp.vl["Steering_Torque"]["Steer_Torque_Output"]
+    else:
+      ret.steeringAngleDeg = cp.vl["Brake_Pressure_L_R"]["Steering_Angle"]
 
     steer_threshold = 75 if self.CP.flags & SubaruFlags.PREGLOBAL else 80
     ret.steeringPressed = abs(ret.steeringTorque) > steer_threshold
