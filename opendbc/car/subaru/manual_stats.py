@@ -427,9 +427,11 @@ class ManualStatsTracker:
 
   def _detect_stall(self, rpm: float, clutch: bool, neutral: bool):
     """Detect engine stall"""
-    # Stall: RPM drops below threshold while not in neutral and clutch not pressed
+    # Stall: RPM drops below threshold (edge detection)
+    # Don't require clutch released - you often press clutch in panic as it stalls
+    # Only require not in neutral (can't stall in neutral)
     if rpm < STALL_RPM_THRESHOLD and self.prev_rpm >= STALL_RPM_THRESHOLD:
-      if not neutral and not clutch:
+      if not neutral:
         self.session.stall_count += 1
 
         # If we were launching, mark it as stalled
