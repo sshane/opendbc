@@ -186,7 +186,7 @@ class ManualStatsTracker:
     self._initialized = True
 
     self._params = Params()
-    self.session: Optional[DriveSession] = None
+    self.session: DriveSession = DriveSession(start_time=time.monotonic())
     self.historical: HistoricalStats = self._load_historical_stats()
 
     # State tracking
@@ -214,8 +214,6 @@ class ManualStatsTracker:
     self.clutch_release_time = 0.0
     self.gear_before_clutch = 0  # gear when clutch was pressed
 
-    # Session state
-    self.session_active = False
     self._live_update_counter = 0
 
   def _load_historical_stats(self) -> HistoricalStats:
@@ -237,11 +235,9 @@ class ManualStatsTracker:
 
   def _save_session_stats(self):
     """Save current session stats (non-blocking, atomic via temp file + rename)"""
-    if self.session is None:
-      return
     try:
       session_dict = {
-        'duration': time.time() - self.session.start_time,
+        'duration': time.monotonic() - self.session.start_time,
         'stall_count': self.session.stall_count,
         'lug_count': self.session.lug_count,
         'upshift_count': self.session.upshift_count,
@@ -263,29 +259,13 @@ class ManualStatsTracker:
     except Exception:
       pass
 
-  def start_session(self):
-    """Start a new driving session"""
-    if self.session_active:
-      return
-    self.session = DriveSession(start_time=time.time())
-    self.session_active = True
-    # Reset state
-    self.is_lugging = False
-    self.is_launching = False
-    self.accel_history.clear()
-
   def end_session(self):
-    """End the current driving session"""
-    if not self.session_active or self.session is None:
-      return
-
-    self.session.end_time = time.time()
+    """Finalize session and update historical stats (called by UI when going offroad)"""
+    self.session.end_time = time.monotonic()
     self.session.duration = self.session.end_time - self.session.start_time
-    self.session_active = False
 
     # Only save sessions longer than 30 seconds
     if self.session.duration < 30:
-      self.session = None
       return
 
     # Update historical stats
@@ -371,9 +351,6 @@ class ManualStatsTracker:
       throttle: Throttle position (0-1)
       dt: Time delta since last update
     """
-    if not self.session_active or self.session is None:
-      self.start_session()
-
     # Calculate acceleration
     accel = (speed - self.prev_speed) / dt if dt > 0 and self.prev_speed >= 0 else 0.0
     self.accel_history.append(accel)
@@ -389,7 +366,7 @@ class ManualStatsTracker:
       self.gear_before_clutch = self.prev_gear
     elif not clutch and self.clutch_pressed_recently:
       # Clutch just released - mark time for shift grading window
-      self.clutch_release_time = time.time()
+      self.clutch_release_time = time.monotonic()
       self.clutch_pressed_recently = False
 
     # Detect stall
@@ -420,9 +397,6 @@ class ManualStatsTracker:
 
   def _detect_stall(self, rpm: float, clutch: bool, neutral: bool):
     """Detect engine stall"""
-    if self.session is None:
-      return
-
     # Stall: RPM drops below threshold while not in neutral and clutch not pressed
     if rpm < STALL_RPM_THRESHOLD and self.prev_rpm >= STALL_RPM_THRESHOLD:
       if not neutral and not clutch:
@@ -436,9 +410,6 @@ class ManualStatsTracker:
 
   def _detect_lug(self, rpm: float, throttle: float, speed: float, in_gear: bool):
     """Detect engine lugging (only when in gear - not neutral and clutch released)"""
-    if self.session is None:
-      return
-
     is_lugging_now = (
       in_gear and
       rpm < LUG_RPM_THRESHOLD and
@@ -448,22 +419,19 @@ class ManualStatsTracker:
 
     if is_lugging_now and not self.is_lugging:
       self.is_lugging = True
-      self.lug_start_time = time.time()
+      self.lug_start_time = time.monotonic()
       self.session.lug_count += 1
     elif not is_lugging_now and self.is_lugging:
-      lug_duration = time.time() - self.lug_start_time
+      lug_duration = time.monotonic() - self.lug_start_time
       self.session.lug_duration_total += lug_duration
       self.is_lugging = False
 
   def _detect_launch(self, rpm: float, speed: float, clutch: bool, neutral: bool, dt: float):
     """Detect and grade launches"""
-    if self.session is None:
-      return
-
     # Start launch when stopped with clutch pressed
     if speed < LAUNCH_SPEED_THRESHOLD and clutch and not self.is_launching:
       self.is_launching = True
-      self.launch_start_time = time.time()
+      self.launch_start_time = time.monotonic()
       self.launch_max_jerk = 0.0
       self.launch_clutch_released = False
 
@@ -491,7 +459,7 @@ class ManualStatsTracker:
 
   def _detect_shift(self, rpm: float, gear: int, clutch: bool, neutral: bool, dt: float):
     """Detect and grade gear shifts - only counts shifts with clutch involvement"""
-    if self.session is None or gear == 0 or neutral:
+    if gear == 0 or neutral:
       return
 
     # Only grade a shift if:
@@ -499,7 +467,7 @@ class ManualStatsTracker:
     # 2. Clutch was recently released (within 1 second)
     # 3. Not in neutral (in_gear)
     # This prevents false positives from gear prediction fluctuations
-    time_since_clutch_release = time.time() - self.clutch_release_time
+    time_since_clutch_release = time.monotonic() - self.clutch_release_time
     if time_since_clutch_release > 1.0:
       return  # Too long since clutch release, not a real shift
 
@@ -622,9 +590,6 @@ class ManualStatsTracker:
 
   def get_live_stats(self) -> dict:
     """Get current session stats for live display"""
-    if self.session is None:
-      return {}
-
     # Get shift suggestion
     suggestion = self.get_shift_suggestion(self.prev_rpm, self.prev_gear, self.prev_throttle)
 
@@ -643,8 +608,6 @@ class ManualStatsTracker:
 
   def _update_live_stats(self):
     """Write live stats to Params for UI display"""
-    if self.session is None:
-      return
     try:
       self._params.put_nonblocking("ManualDriveLiveStats", json.dumps(self.get_live_stats()))
     except Exception:
