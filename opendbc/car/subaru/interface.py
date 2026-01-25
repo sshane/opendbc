@@ -83,6 +83,10 @@ class CarInterface(CarInterfaceBase):
 
     elif candidate == CAR.SUBARU_OUTBACK_PREGLOBAL:
       pass
+
+    elif candidate == CAR.SUBARU_BRZ_6MT_2024:
+      ret.safetyConfigs[0].safetyParam = SubaruSafetyFlags.MANUAL.value
+
     else:
       raise ValueError(f"unknown car: {candidate}")
 

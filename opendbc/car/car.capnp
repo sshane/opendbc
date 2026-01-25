@@ -283,6 +283,15 @@ struct CarState {
     }
   }
 
+  # manual transmission
+  clutchPressed @28 :Bool;
+  engineRpm @46 :Float32;
+  gearActual @61 :UInt8;   # actual gear number for manual cars (1-6, 0 for neutral/unknown)
+  inNeutral @62 :Bool;     # neutral gear signal from car
+  shiftSmoothness @63 :Float32;  # smoothness of last shift (accel std dev, lower=smoother), 0 when no shift
+  shiftGrade @64 :UInt8;   # grade of last shift: 0=none, 1=good, 2=ok, 3=poor
+  isLugging @65 :Bool;     # true when engine is lugging (low RPM under load)
+
   # deprecated
   errorsDEPRECATED @0 :List(OnroadEventDEPRECATED.EventName);
   gasDEPRECATED @3 :Float32;        # this is user pedal only
@@ -291,8 +300,6 @@ struct CarState {
   canMonoTimesDEPRECATED @12: List(UInt64);
   canRcvTimeoutDEPRECATED @49 :Bool;
   eventsDEPRECATED @13 :List(OnroadEventDEPRECATED);
-  clutchPressedDEPRECATED @28 :Bool;
-  engineRpmDEPRECATED @46 :Float32;
 }
 
 # ******* radar state @ 20hz *******
