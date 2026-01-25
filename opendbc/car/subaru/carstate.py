@@ -76,10 +76,10 @@ class CarState(CarStateBase):
       # Predict gear from RPM and speed (no Transmission message on MT)
       ret.gearActual = self.manual_stats.predict_gear(ret.engineRpm, ret.vEgo)
 
-      if ret.inNeutral:
-        ret.gearShifter = structs.CarState.GearShifter.neutral
-      else:
-        ret.gearShifter = structs.CarState.GearShifter.drive
+      # if ret.inNeutral:
+      #   ret.gearShifter = structs.CarState.GearShifter.neutral
+      # else:
+      ret.gearShifter = structs.CarState.GearShifter.drive
 
     # Steering
     if not self.CP.flags & SubaruFlags.MANUAL:
