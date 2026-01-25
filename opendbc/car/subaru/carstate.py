@@ -74,7 +74,11 @@ class CarState(CarStateBase):
       ret.clutchPressed = bool(cp_alt.vl["Cruise_Status"]["Clutch_Depressed"])
 
       # Predict gear from RPM and speed (no Transmission message on MT)
-      ret.gearActual = self.manual_stats.predict_gear(ret.engineRpm, ret.vEgo)
+      # Return 0 when clutch pressed or in neutral - can't determine gear
+      if ret.clutchPressed or ret.inNeutral:
+        ret.gearActual = 0
+      else:
+        ret.gearActual = self.manual_stats.predict_gear(ret.engineRpm, ret.vEgo)
 
       # if ret.inNeutral:
       #   ret.gearShifter = structs.CarState.GearShifter.neutral
@@ -153,14 +157,20 @@ class CarState(CarStateBase):
     # Update manual transmission stats
     if self.CP.flags & SubaruFlags.MANUAL:
       throttle_pos = throttle_msg["Throttle_Pedal"] / 255.0  # Normalize to 0-1
+      if self.manual_stats.frame % 1000 == 0:
+        print(f"[MT] frame={self.manual_stats.frame} rpm={ret.engineRpm:.0f} gear={ret.gearActual} speed={ret.vEgo:.1f} aEgo={ret.aEgo:.2f} clutch={ret.clutchPressed} neutral={ret.inNeutral}", flush=True)
       self.manual_stats.update(
         rpm=ret.engineRpm,
         gear=ret.gearActual,
         speed=ret.vEgo,
+        accel=ret.aEgo,
         clutch=ret.clutchPressed,
         neutral=ret.inNeutral,
         throttle=throttle_pos,
       )
+      # Log shift quality and lug state for plotjuggler
+      ret.shiftSmoothness, ret.shiftGrade = self.manual_stats.get_shift_info()
+      ret.isLugging = self.manual_stats.is_lugging
 
     return ret
 

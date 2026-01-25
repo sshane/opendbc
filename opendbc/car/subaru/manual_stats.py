@@ -20,6 +20,7 @@ from typing import Optional
 from collections import deque
 
 from openpilot.common.params import Params
+from opendbc.car import DT_CTRL
 
 
 # 2024 Subaru BRZ 6MT gear ratios
@@ -52,9 +53,12 @@ LAUNCH_SPEED_THRESHOLD = 0.5  # m/s
 LAUNCH_COMPLETE_SPEED = 5.0  # m/s
 
 # Grading thresholds
-GOOD_UPSHIFT_MAX_JERK = 2.0  # m/s^3
+# Acceleration std dev during shifts - measures bumpiness (lower = smoother)
+GOOD_SHIFT_SMOOTHNESS = 0.5   # m/s^2 std dev - smooth shift
+OK_SHIFT_SMOOTHNESS = 1.0     # m/s^2 std dev - acceptable shift
 GOOD_DOWNSHIFT_REV_MATCH_TOLERANCE = 300  # RPM
-GOOD_LAUNCH_MAX_JERK = 3.0  # m/s^3
+OK_DOWNSHIFT_REV_MATCH_TOLERANCE = 500    # RPM
+GOOD_LAUNCH_SMOOTHNESS = 0.5  # m/s^2 std dev
 
 
 def rpm_for_speed_and_gear(speed_ms: float, gear: int) -> float:
@@ -186,8 +190,12 @@ class ManualStatsTracker:
     self._initialized = True
 
     self._params = Params()
-    self.session: DriveSession = DriveSession(start_time=time.monotonic())
     self.historical: HistoricalStats = self._load_historical_stats()
+
+    # Frame counter - each frame is DT_CTRL (10ms)
+    self.frame = 0
+    self.session_start_frame = 0
+    self.session: DriveSession = DriveSession(start_time=0.0)  # Will set duration from frames
 
     # State tracking
     self.prev_rpm = 0.0
@@ -196,22 +204,27 @@ class ManualStatsTracker:
     self.prev_accel = 0.0
     self.prev_throttle = 0.0
 
-    # Acceleration history for jerk calculation (last 0.5s at ~100Hz)
+    # Acceleration history for jerk calculation (last 0.5s at ~100Hz = 50 frames)
     self.accel_history: deque = deque(maxlen=50)
 
     # Lugging state
     self.is_lugging = False
-    self.lug_start_time = 0.0
+    self.lug_start_frame = 0
 
     # Launch state
     self.is_launching = False
-    self.launch_start_time = 0.0
+    self.launch_start_frame = 0
     self.launch_max_jerk = 0.0
     self.launch_clutch_released = False
 
     # Shift validation state - require clutch press for real shifts
     self.clutch_pressed_recently = False
-    self.clutch_release_time = 0.0
+    self.clutch_release_frame = 0
+
+    # Last shift info for logging to CarState
+    self.last_shift_smoothness = 0.0
+    self.last_shift_grade = 0  # 0=none, 1=good, 2=ok, 3=poor
+    self.last_shift_frame = 0
     self.gear_before_clutch = 0  # gear when clutch was pressed
 
     self._live_update_counter = 0
@@ -236,8 +249,9 @@ class ManualStatsTracker:
   def _save_session_stats(self):
     """Save current session stats (non-blocking, atomic via temp file + rename)"""
     try:
+      duration_seconds = (self.frame - self.session_start_frame) * DT_CTRL
       session_dict = {
-        'duration': time.monotonic() - self.session.start_time,
+        'duration': duration_seconds,
         'stall_count': self.session.stall_count,
         'lug_count': self.session.lug_count,
         'upshift_count': self.session.upshift_count,
@@ -261,8 +275,7 @@ class ManualStatsTracker:
 
   def end_session(self):
     """Finalize session and update historical stats (called by UI when going offroad)"""
-    self.session.end_time = time.monotonic()
-    self.session.duration = self.session.end_time - self.session.start_time
+    self.session.duration = (self.frame - self.session_start_frame) * DT_CTRL
 
     # Only save sessions longer than 30 seconds
     if self.session.duration < 30:
@@ -329,30 +342,45 @@ class ManualStatsTracker:
     self._save_session_stats()
     self._save_historical_stats()
 
-  def _calculate_jerk(self, dt: float) -> float:
-    """Calculate jerk from acceleration history"""
-    if len(self.accel_history) < 2:
+  def _calculate_jerk(self) -> float:
+    """
+    Calculate smoothness metric from acceleration history.
+    Returns the standard deviation of acceleration over the last 0.5s -
+    measures how much acceleration varied during the shift.
+    Lower = smoother shift.
+    """
+    if len(self.accel_history) < 10:
       return 0.0
-    accels = list(self.accel_history)
-    jerks = [(accels[i+1] - accels[i]) / dt for i in range(len(accels) - 1)]
-    return max(abs(j) for j in jerks) if jerks else 0.0
 
-  def update(self, rpm: float, gear: int, speed: float, clutch: bool, neutral: bool,
-             throttle: float, dt: float = 0.01):
+    # Use last 50 frames (0.5s)
+    accels = list(self.accel_history)[-50:]
+
+    # Standard deviation of acceleration - measures bumpiness
+    mean_accel = sum(accels) / len(accels)
+    variance = sum((a - mean_accel) ** 2 for a in accels) / len(accels)
+    std_accel = variance ** 0.5
+
+    return std_accel
+
+  def update(self, rpm: float, gear: int, speed: float, accel: float, clutch: bool, neutral: bool,
+             throttle: float):
     """
     Main update function - called from carstate.py on each update.
+    Each call represents one frame (DT_CTRL = 10ms).
 
     Args:
       rpm: Engine RPM
       gear: Current gear (1-6, 0 for neutral/unknown)
       speed: Vehicle speed in m/s
+      accel: Vehicle acceleration in m/s^2 (from CarState.aEgo)
       clutch: True if clutch pedal is pressed
       neutral: True if in neutral
       throttle: Throttle position (0-1)
-      dt: Time delta since last update
     """
-    # Calculate acceleration
-    accel = (speed - self.prev_speed) / dt if dt > 0 and self.prev_speed >= 0 else 0.0
+    # Increment frame counter
+    self.frame += 1
+
+    # Use aEgo from CarState (Kalman filtered, more accurate than computing from speed)
     self.accel_history.append(accel)
 
     # "In gear" means: not in neutral AND clutch not pressed (power transmitting)
@@ -365,8 +393,8 @@ class ManualStatsTracker:
       self.clutch_pressed_recently = True
       self.gear_before_clutch = self.prev_gear
     elif not clutch and self.clutch_pressed_recently:
-      # Clutch just released - mark time for shift grading window
-      self.clutch_release_time = time.monotonic()
+      # Clutch just released - mark frame for shift grading window
+      self.clutch_release_frame = self.frame
       self.clutch_pressed_recently = False
 
     # Detect stall
@@ -376,10 +404,10 @@ class ManualStatsTracker:
     self._detect_lug(rpm, throttle, speed, in_gear)
 
     # Detect launches
-    self._detect_launch(rpm, speed, clutch, neutral, dt)
+    self._detect_launch(rpm, speed, clutch, neutral)
 
     # Detect shifts (only when clutch was involved and in gear)
-    self._detect_shift(rpm, gear, clutch, neutral, dt)
+    self._detect_shift(rpm, gear, clutch, neutral)
 
     # Update previous state
     self.prev_rpm = rpm
@@ -419,19 +447,19 @@ class ManualStatsTracker:
 
     if is_lugging_now and not self.is_lugging:
       self.is_lugging = True
-      self.lug_start_time = time.monotonic()
+      self.lug_start_frame = self.frame
       self.session.lug_count += 1
     elif not is_lugging_now and self.is_lugging:
-      lug_duration = time.monotonic() - self.lug_start_time
+      lug_duration = (self.frame - self.lug_start_frame) * DT_CTRL
       self.session.lug_duration_total += lug_duration
       self.is_lugging = False
 
-  def _detect_launch(self, rpm: float, speed: float, clutch: bool, neutral: bool, dt: float):
+  def _detect_launch(self, rpm: float, speed: float, clutch: bool, neutral: bool):
     """Detect and grade launches"""
     # Start launch when stopped with clutch pressed
     if speed < LAUNCH_SPEED_THRESHOLD and clutch and not self.is_launching:
       self.is_launching = True
-      self.launch_start_time = time.monotonic()
+      self.launch_start_frame = self.frame
       self.launch_max_jerk = 0.0
       self.launch_clutch_released = False
 
@@ -440,16 +468,16 @@ class ManualStatsTracker:
       if not clutch:
         self.launch_clutch_released = True
 
-      # Track max jerk
-      current_jerk = self._calculate_jerk(dt)
-      self.launch_max_jerk = max(self.launch_max_jerk, current_jerk)
+      # Track max bumpiness (accel std dev)
+      current_smoothness = self._calculate_jerk()
+      self.launch_max_jerk = max(self.launch_max_jerk, current_smoothness)
 
       # Check for successful launch completion
       if speed >= LAUNCH_COMPLETE_SPEED and self.launch_clutch_released:
-        # Grade the launch
-        if self.launch_max_jerk < GOOD_LAUNCH_MAX_JERK:
+        # Grade the launch based on smoothness during clutch engagement
+        if self.launch_max_jerk < GOOD_LAUNCH_SMOOTHNESS:
           self.session.launch_good += 1
-        elif self.launch_max_jerk < GOOD_LAUNCH_MAX_JERK * 1.5:
+        elif self.launch_max_jerk < GOOD_LAUNCH_SMOOTHNESS * 2:
           self.session.launch_ok += 1
         else:
           self.session.launch_poor += 1
@@ -457,55 +485,70 @@ class ManualStatsTracker:
         self.session.launch_count += 1
         self.is_launching = False
 
-  def _detect_shift(self, rpm: float, gear: int, clutch: bool, neutral: bool, dt: float):
+  def _detect_shift(self, rpm: float, gear: int, clutch: bool, neutral: bool):
     """Detect and grade gear shifts - only counts shifts with clutch involvement"""
     if gear == 0 or neutral:
       return
 
     # Only grade a shift if:
     # 1. Gear changed from what it was when clutch was pressed
-    # 2. Clutch was recently released (within 1 second)
+    # 2. Clutch was recently released (within 1 second = 100 frames)
     # 3. Not in neutral (in_gear)
     # This prevents false positives from gear prediction fluctuations
-    time_since_clutch_release = time.monotonic() - self.clutch_release_time
-    if time_since_clutch_release > 1.0:
+    frames_since_clutch_release = self.frame - self.clutch_release_frame
+    if frames_since_clutch_release > 100:  # 100 frames = 1 second
       return  # Too long since clutch release, not a real shift
 
     if gear != self.gear_before_clutch and self.gear_before_clutch > 0 and not clutch:
       is_upshift = gear > self.gear_before_clutch
-      jerk = self._calculate_jerk(dt)
+      smoothness = self._calculate_jerk()  # Returns accel std dev - lower is smoother
 
-      # Track per-gear jerk for the gear we shifted INTO
+      # Track per-gear smoothness for the gear we shifted INTO
       if 1 <= gear <= 6:
         self.historical.gear_shift_counts[gear] = self.historical.gear_shift_counts.get(gear, 0) + 1
-        self.historical.gear_shift_jerk_totals[gear] = self.historical.gear_shift_jerk_totals.get(gear, 0.0) + abs(jerk)
+        self.historical.gear_shift_jerk_totals[gear] = self.historical.gear_shift_jerk_totals.get(gear, 0.0) + smoothness
 
       if is_upshift:
-        # Grade upshift based on smoothness
-        if jerk < GOOD_UPSHIFT_MAX_JERK:
+        # Grade upshift based on smoothness (accel std dev)
+        if smoothness < GOOD_SHIFT_SMOOTHNESS:
+          grade = "good"
           self.session.upshift_good += 1
-        elif jerk < GOOD_UPSHIFT_MAX_JERK * 1.5:
+        elif smoothness < OK_SHIFT_SMOOTHNESS:
+          grade = "ok"
           self.session.upshift_ok += 1
         else:
+          grade = "poor"
           self.session.upshift_poor += 1
         self.session.upshift_count += 1
+        print(f"UPSHIFT {self.gear_before_clutch}->{gear}: smoothness={smoothness:.2f} m/s^2, grade={grade}, speed={self.prev_speed:.1f}")
       else:
-        # Grade downshift - check rev matching using real BRZ gear ratios
-        # Calculate what the RPM should be in the new gear at current speed
-        current_speed = speed_for_rpm_and_gear(self.prev_rpm, self.gear_before_clutch)
-        target_rpm = rpm_for_speed_and_gear(current_speed, gear)
+        # Grade downshift - primarily on rev matching, smoothness as secondary
+        # Use actual current speed (more reliable than computing from RPM during shift)
+        target_rpm = rpm_for_speed_and_gear(self.prev_speed, gear)
         rpm_match_error = abs(rpm - target_rpm)
 
-        if rpm_match_error < GOOD_DOWNSHIFT_REV_MATCH_TOLERANCE and jerk < GOOD_UPSHIFT_MAX_JERK:
+        # Good: great rev-match AND smooth
+        # Ok: decent rev-match OR great rev-match but bumpy
+        # Poor: bad rev-match
+        if rpm_match_error < GOOD_DOWNSHIFT_REV_MATCH_TOLERANCE and smoothness < GOOD_SHIFT_SMOOTHNESS:
+          grade = "good"
           self.session.downshift_good += 1
-        elif rpm_match_error < GOOD_DOWNSHIFT_REV_MATCH_TOLERANCE * 2:
+        elif rpm_match_error < OK_DOWNSHIFT_REV_MATCH_TOLERANCE or (rpm_match_error < GOOD_DOWNSHIFT_REV_MATCH_TOLERANCE and smoothness < OK_SHIFT_SMOOTHNESS):
+          grade = "ok"
           self.session.downshift_ok += 1
         else:
+          grade = "poor"
           self.session.downshift_poor += 1
         self.session.downshift_count += 1
+        print(f"DOWNSHIFT {self.gear_before_clutch}->{gear}: smoothness={smoothness:.2f}, rpm={rpm:.0f}, target_rpm={target_rpm:.0f}, rpm_err={rpm_match_error:.0f}, speed={self.prev_speed:.1f}, grade={grade}")
+
+      # Store shift info for CarState logging
+      self.last_shift_smoothness = smoothness
+      self.last_shift_grade = 1 if grade == "good" else (2 if grade == "ok" else 3)
+      self.last_shift_frame = self.frame
 
       # Reset so we don't double-count this shift
-      self.clutch_release_time = 0.0
+      self.clutch_release_frame = 0
       self.gear_before_clutch = 0
 
   def predict_gear(self, rpm: float, speed_ms: float) -> int:
@@ -587,6 +630,13 @@ class ManualStatsTracker:
     if target_gear not in BRZ_GEAR_RATIOS:
       return 0
     return int(rpm_for_speed_and_gear(speed_ms, target_gear))
+
+  def get_shift_info(self) -> tuple:
+    """Get last shift info for CarState logging. Returns (smoothness, grade).
+    Values are only non-zero for 50 frames (0.5s) after a shift."""
+    if self.frame - self.last_shift_frame < 50:
+      return (self.last_shift_smoothness, self.last_shift_grade)
+    return (0.0, 0)
 
   def get_live_stats(self) -> dict:
     """Get current session stats for live display"""
