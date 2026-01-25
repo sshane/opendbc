@@ -283,6 +283,12 @@ struct CarState {
     }
   }
 
+  # manual transmission
+  clutchPressed @28 :Bool;
+  engineRpm @46 :Float32;
+  gearActual @61 :UInt8;   # actual gear number for manual cars (1-6, 0 for neutral/unknown)
+  inNeutral @62 :Bool;     # neutral gear signal from car
+
   # deprecated
   errorsDEPRECATED @0 :List(OnroadEventDEPRECATED.EventName);
   gasDEPRECATED @3 :Float32;        # this is user pedal only
@@ -291,8 +297,6 @@ struct CarState {
   canMonoTimesDEPRECATED @12: List(UInt64);
   canRcvTimeoutDEPRECATED @49 :Bool;
   eventsDEPRECATED @13 :List(OnroadEventDEPRECATED);
-  clutchPressedDEPRECATED @28 :Bool;
-  engineRpm @46 :Float32;
 }
 
 # ******* radar state @ 20hz *******

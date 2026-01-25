@@ -5,6 +5,7 @@ from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.interfaces import CarStateBase
 from opendbc.car.subaru.values import DBC, CanBus, SubaruFlags
 from opendbc.car import CanSignalRateCalculator
+from opendbc.car.subaru.manual_stats import get_tracker
 
 
 class CarState(CarStateBase):
@@ -14,6 +15,10 @@ class CarState(CarStateBase):
     self.shifter_values = can_define.dv["Transmission"]["Gear"]
 
     self.angle_rate_calulator = CanSignalRateCalculator(50)
+
+    # Manual transmission stats tracker
+    if CP.flags & SubaruFlags.MANUAL:
+      self.manual_stats = get_tracker()
 
   def update(self, can_parsers) -> structs.CarState:
     cp = can_parsers[Bus.pt]
@@ -56,15 +61,27 @@ class CarState(CarStateBase):
       ret.leftBlindspot = (cp.vl["BSD_RCTA"]["L_ADJACENT"] == 1) or (cp.vl["BSD_RCTA"]["L_APPROACHING"] == 1)
       ret.rightBlindspot = (cp.vl["BSD_RCTA"]["R_ADJACENT"] == 1) or (cp.vl["BSD_RCTA"]["R_APPROACHING"] == 1)
 
+    # Read engine RPM early (needed for manual gear prediction)
+    ret.engineRpm = throttle_msg["Engine_RPM"]
+
     if not self.CP.flags & SubaruFlags.MANUAL:
       cp_transmission = cp_alt if self.CP.flags & SubaruFlags.HYBRID else cp
       can_gear = int(cp_transmission.vl["Transmission"]["Gear"])
       ret.gearShifter = self.parse_gear_shifter(self.shifter_values.get(can_gear, None))
     else:
-      # TODO: detect neutral
-      ret.gearShifter = structs.CarState.GearShifter.drive
+      # Manual transmission - read clutch and neutral from CAN
+      ret.inNeutral = bool(throttle_msg["Neutral"])
+      ret.clutchPressed = bool(cp.vl["Cruise_Status"]["Clutch_Depressed"])
 
-    # TODO: find, this sucks
+      # Predict gear from RPM and speed (no Transmission message on MT)
+      ret.gearActual = self.manual_stats.predict_gear(ret.engineRpm, ret.vEgo)
+
+      if ret.inNeutral:
+        ret.gearShifter = structs.CarState.GearShifter.neutral
+      else:
+        ret.gearShifter = structs.CarState.GearShifter.drive
+
+    # Steering
     if not self.CP.flags & SubaruFlags.MANUAL:
       ret.steeringAngleDeg = cp.vl["Steering_Torque"]["Steering_Angle"]
 
@@ -79,8 +96,6 @@ class CarState(CarStateBase):
 
     steer_threshold = 75 if self.CP.flags & SubaruFlags.PREGLOBAL else 80
     ret.steeringPressed = abs(ret.steeringTorque) > steer_threshold
-
-    ret.engineRpm = cp.vl["Throttle"]["Engine_RPM"]
 
     cp_cruise = cp_alt if self.CP.flags & SubaruFlags.GLOBAL_GEN2 else cp
     if self.CP.flags & SubaruFlags.HYBRID:
@@ -134,6 +149,18 @@ class CarState(CarStateBase):
     self.es_dashstatus_msg = copy.copy(cp_cam.vl["ES_DashStatus"])
     if self.CP.flags & SubaruFlags.SEND_INFOTAINMENT:
       self.es_infotainment_msg = copy.copy(cp_cam.vl["ES_Infotainment"])
+
+    # Update manual transmission stats
+    if self.CP.flags & SubaruFlags.MANUAL:
+      throttle_pos = throttle_msg["Throttle_Pedal"] / 255.0  # Normalize to 0-1
+      self.manual_stats.update(
+        rpm=ret.engineRpm,
+        gear=ret.gearActual,
+        speed=ret.vEgo,
+        clutch=ret.clutchPressed,
+        neutral=ret.inNeutral,
+        throttle=throttle_pos,
+      )
 
     return ret
 
