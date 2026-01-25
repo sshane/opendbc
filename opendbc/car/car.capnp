@@ -292,7 +292,7 @@ struct CarState {
   canRcvTimeoutDEPRECATED @49 :Bool;
   eventsDEPRECATED @13 :List(OnroadEventDEPRECATED);
   clutchPressedDEPRECATED @28 :Bool;
-  engineRpmDEPRECATED @46 :Float32;
+  engineRpm @46 :Float32;
 }
 
 # ******* radar state @ 20hz *******

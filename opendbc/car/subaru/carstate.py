@@ -80,6 +80,8 @@ class CarState(CarStateBase):
     steer_threshold = 75 if self.CP.flags & SubaruFlags.PREGLOBAL else 80
     ret.steeringPressed = abs(ret.steeringTorque) > steer_threshold
 
+    ret.engineRpm = cp.vl["Throttle"]["Engine_RPM"]
+
     cp_cruise = cp_alt if self.CP.flags & SubaruFlags.GLOBAL_GEN2 else cp
     if self.CP.flags & SubaruFlags.HYBRID:
       ret.cruiseState.enabled = cp_cam.vl["ES_DashStatus"]['Cruise_Activated'] != 0
