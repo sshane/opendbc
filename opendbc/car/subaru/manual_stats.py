@@ -101,6 +101,37 @@ class DriveSession:
 
 
 @dataclass
+class SessionSummary:
+  """Summary of a single drive session for history tracking"""
+  timestamp: float = 0.0  # Unix timestamp when session ended
+  duration: float = 0.0  # seconds
+  stalls: int = 0
+  lugs: int = 0
+  upshifts: int = 0
+  upshifts_good: int = 0
+  downshifts: int = 0
+  downshifts_good: int = 0
+  launches: int = 0
+  launches_good: int = 0
+
+  @property
+  def shift_score(self) -> float:
+    """Calculate shift quality score 0-100"""
+    total = self.upshifts + self.downshifts
+    if total == 0:
+      return 100.0
+    good = self.upshifts_good + self.downshifts_good
+    return (good / total) * 100
+
+  @property
+  def stall_rate(self) -> float:
+    """Stalls per 10 minutes of driving"""
+    if self.duration < 60:
+      return 0.0
+    return (self.stalls / self.duration) * 600
+
+
+@dataclass
 class HistoricalStats:
   total_drives: int = 0
   total_drive_time: float = 0.0
@@ -116,6 +147,11 @@ class HistoricalStats:
 
   total_downshifts: int = 0
   downshifts_good: int = 0
+
+  # Per-gear shift quality tracking (jerk values, lower = smoother)
+  # gear_shifts_into[gear] = [count, total_jerk] for averaging
+  gear_shift_counts: dict = field(default_factory=lambda: {1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0})
+  gear_shift_jerk_totals: dict = field(default_factory=lambda: {1: 0.0, 2: 0.0, 3: 0.0, 4: 0.0, 5: 0.0, 6: 0.0})
   downshifts_ok: int = 0
   downshifts_poor: int = 0
 
@@ -125,6 +161,10 @@ class HistoricalStats:
   launches_poor: int = 0
   launches_stalled: int = 0
 
+  # Per-session history for plotting (keep last 30 sessions)
+  session_history: list = field(default_factory=list)
+
+  # Legacy fields for backward compatibility
   recent_stall_rates: list = field(default_factory=list)
   recent_shift_scores: list = field(default_factory=list)
 
@@ -271,7 +311,25 @@ class ManualStatsTracker:
     self.historical.launches_poor += self.session.launch_poor
     self.historical.launches_stalled += self.session.launch_stalled
 
-    # Trend tracking
+    # Add session to history for plotting
+    summary = SessionSummary(
+      timestamp=time.time(),
+      duration=self.session.duration,
+      stalls=self.session.stall_count,
+      lugs=self.session.lug_count,
+      upshifts=self.session.upshift_count,
+      upshifts_good=self.session.upshift_good,
+      downshifts=self.session.downshift_count,
+      downshifts_good=self.session.downshift_good,
+      launches=self.session.launch_count,
+      launches_good=self.session.launch_good,
+    )
+    self.historical.session_history.append(asdict(summary))
+    # Keep last 30 sessions
+    if len(self.historical.session_history) > 30:
+      self.historical.session_history.pop(0)
+
+    # Legacy trend tracking (for backward compatibility)
     self.historical.recent_stall_rates.append(self.session.stall_count)
     if len(self.historical.recent_stall_rates) > 10:
       self.historical.recent_stall_rates.pop(0)
@@ -448,6 +506,11 @@ class ManualStatsTracker:
     if gear != self.gear_before_clutch and self.gear_before_clutch > 0 and not clutch:
       is_upshift = gear > self.gear_before_clutch
       jerk = self._calculate_jerk(dt)
+
+      # Track per-gear jerk for the gear we shifted INTO
+      if 1 <= gear <= 6:
+        self.historical.gear_shift_counts[gear] = self.historical.gear_shift_counts.get(gear, 0) + 1
+        self.historical.gear_shift_jerk_totals[gear] = self.historical.gear_shift_jerk_totals.get(gear, 0.0) + abs(jerk)
 
       if is_upshift:
         # Grade upshift based on smoothness
