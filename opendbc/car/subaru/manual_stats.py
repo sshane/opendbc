@@ -659,7 +659,7 @@ class ManualStatsTracker:
   def _update_live_stats(self):
     """Write live stats to Params for UI display"""
     try:
-      self._params.put_nonblocking("ManualDriveLiveStats", json.dumps(self.get_live_stats()))
+      self._params.put_nonblocking("ManualDriveLiveStats", self.get_live_stats())
     except Exception:
       pass
 
