@@ -158,7 +158,7 @@ class CarState(CarStateBase):
     if self.CP.flags & SubaruFlags.MANUAL:
       throttle_pos = throttle_msg["Throttle_Pedal"] / 255.0  # Normalize to 0-1
       if self.manual_stats.frame % 1000 == 0:
-        print(f"[MT] frame={self.manual_stats.frame} rpm={ret.engineRpm:.0f} gear={ret.gearActual} speed={ret.vEgo:.1f} aEgo={ret.aEgo:.2f} clutch={ret.clutchPressed} neutral={ret.inNeutral}", flush=True)
+        print(f"[MT] frame={self.manual_stats.frame} rpm={ret.engineRpm:.0f} gear={ret.gearActual} speed={ret.vEgo:.1f} throttle={throttle_pos:.2f} clutch={ret.clutchPressed} neutral={ret.inNeutral} lugging={self.manual_stats.is_lugging}", flush=True)
       self.manual_stats.update(
         rpm=ret.engineRpm,
         gear=ret.gearActual,

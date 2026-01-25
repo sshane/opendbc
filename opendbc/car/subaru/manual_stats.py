@@ -46,9 +46,9 @@ PERFORMANCE_DOWNSHIFT_RPM = 4000  # Keep in powerband
 
 # Detection thresholds
 STALL_RPM_THRESHOLD = 300
-LUG_RPM_THRESHOLD = 1200
-LUG_LOAD_THRESHOLD = 0.15
-MIN_SPEED_FOR_LUG = 2.0  # m/s
+LUG_RPM_THRESHOLD = 1500  # BRZ lugs noticeably below this under load
+LUG_LOAD_THRESHOLD = 0.10  # 10% throttle - any meaningful load
+MIN_SPEED_FOR_LUG = 1.5  # m/s (~3.4 mph)
 LAUNCH_SPEED_THRESHOLD = 0.5  # m/s
 LAUNCH_COMPLETE_SPEED = 5.0  # m/s
 
@@ -58,7 +58,9 @@ GOOD_SHIFT_SMOOTHNESS = 0.5   # m/s^2 std dev - smooth shift
 OK_SHIFT_SMOOTHNESS = 1.0     # m/s^2 std dev - acceptable shift
 GOOD_DOWNSHIFT_REV_MATCH_TOLERANCE = 300  # RPM
 OK_DOWNSHIFT_REV_MATCH_TOLERANCE = 500    # RPM
-GOOD_LAUNCH_SMOOTHNESS = 0.5  # m/s^2 std dev
+# Launch smoothness - more forgiving since accel naturally varies during launch
+GOOD_LAUNCH_SMOOTHNESS = 1.5  # m/s^2 std dev - smooth clutch engagement
+OK_LAUNCH_SMOOTHNESS = 2.5    # m/s^2 std dev - acceptable launch
 
 
 def rpm_for_speed_and_gear(speed_ms: float, gear: int) -> float:
@@ -477,7 +479,7 @@ class ManualStatsTracker:
         # Grade the launch based on smoothness during clutch engagement
         if self.launch_max_jerk < GOOD_LAUNCH_SMOOTHNESS:
           self.session.launch_good += 1
-        elif self.launch_max_jerk < GOOD_LAUNCH_SMOOTHNESS * 2:
+        elif self.launch_max_jerk < OK_LAUNCH_SMOOTHNESS:
           self.session.launch_ok += 1
         else:
           self.session.launch_poor += 1
