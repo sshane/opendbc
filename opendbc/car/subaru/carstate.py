@@ -71,7 +71,7 @@ class CarState(CarStateBase):
     else:
       # Manual transmission - read clutch and neutral from CAN
       ret.inNeutral = bool(throttle_msg["Neutral"])
-      ret.clutchPressed = bool(cp.vl["Cruise_Status"]["Clutch_Depressed"])
+      ret.clutchPressed = bool(cp_alt.vl["Cruise_Status"]["Clutch_Depressed"])
 
       # Predict gear from RPM and speed (no Transmission message on MT)
       ret.gearActual = self.manual_stats.predict_gear(ret.engineRpm, ret.vEgo)
