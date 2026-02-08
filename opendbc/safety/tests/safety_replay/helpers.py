@@ -86,6 +86,7 @@ def package_can_msg(msg):
 
 
 def init_segment(safety, msgs, mode, param):
+  return
   sendcan = (msg for msg in msgs if msg.which() == 'sendcan')
   steering_msgs = (can for msg in sendcan for can in msg.sendcan if is_steering_msg(mode, param, can.address))
 

@@ -5,6 +5,7 @@ from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.interfaces import CarStateBase
 from opendbc.car.subaru.values import DBC, CanBus, SubaruFlags
 from opendbc.car import CanSignalRateCalculator
+from opendbc.car.subaru.manual_stats import get_tracker
 
 
 class CarState(CarStateBase):
@@ -14,6 +15,10 @@ class CarState(CarStateBase):
     self.shifter_values = can_define.dv["Transmission"]["Gear"]
 
     self.angle_rate_calulator = CanSignalRateCalculator(50)
+
+    # Manual transmission stats tracker
+    if CP.flags & SubaruFlags.MANUAL:
+      self.manual_stats = get_tracker()
 
   def update(self, can_parsers) -> structs.CarState:
     cp = can_parsers[Bus.pt]
@@ -56,18 +61,42 @@ class CarState(CarStateBase):
       ret.leftBlindspot = (cp.vl["BSD_RCTA"]["L_ADJACENT"] == 1) or (cp.vl["BSD_RCTA"]["L_APPROACHING"] == 1)
       ret.rightBlindspot = (cp.vl["BSD_RCTA"]["R_ADJACENT"] == 1) or (cp.vl["BSD_RCTA"]["R_APPROACHING"] == 1)
 
-    cp_transmission = cp_alt if self.CP.flags & SubaruFlags.HYBRID else cp
-    can_gear = int(cp_transmission.vl["Transmission"]["Gear"])
-    ret.gearShifter = self.parse_gear_shifter(self.shifter_values.get(can_gear, None))
+    # Read engine RPM early (needed for manual gear prediction)
+    ret.engineRpm = throttle_msg["Engine_RPM"]
 
-    ret.steeringAngleDeg = cp.vl["Steering_Torque"]["Steering_Angle"]
+    if not self.CP.flags & SubaruFlags.MANUAL:
+      cp_transmission = cp_alt if self.CP.flags & SubaruFlags.HYBRID else cp
+      can_gear = int(cp_transmission.vl["Transmission"]["Gear"])
+      ret.gearShifter = self.parse_gear_shifter(self.shifter_values.get(can_gear, None))
+    else:
+      # Manual transmission - read clutch and neutral from CAN
+      ret.inNeutral = bool(throttle_msg["Neutral"])
+      ret.clutchPressed = bool(cp_alt.vl["Cruise_Status"]["Clutch_Depressed"])
 
-    if not (self.CP.flags & SubaruFlags.PREGLOBAL):
-      # ideally we get this from the car, but unclear if it exists. diagnostic software doesn't even have it
-      ret.steeringRateDeg = self.angle_rate_calulator.update(ret.steeringAngleDeg, cp.vl["Steering_Torque"]["COUNTER"])
+      # Predict gear from RPM and speed (no Transmission message on MT)
+      # Return 0 when clutch pressed or in neutral - can't determine gear
+      if ret.clutchPressed or ret.inNeutral:
+        ret.gearActual = 0
+      else:
+        ret.gearActual = self.manual_stats.predict_gear(ret.engineRpm, ret.vEgo)
 
-    ret.steeringTorque = cp.vl["Steering_Torque"]["Steer_Torque_Sensor"]
-    ret.steeringTorqueEps = cp.vl["Steering_Torque"]["Steer_Torque_Output"]
+      # if ret.inNeutral:
+      #   ret.gearShifter = structs.CarState.GearShifter.neutral
+      # else:
+      ret.gearShifter = structs.CarState.GearShifter.drive
+
+    # Steering
+    if not self.CP.flags & SubaruFlags.MANUAL:
+      ret.steeringAngleDeg = cp.vl["Steering_Torque"]["Steering_Angle"]
+
+      if not (self.CP.flags & SubaruFlags.PREGLOBAL):
+        # ideally we get this from the car, but unclear if it exists. diagnostic software doesn't even have it
+        ret.steeringRateDeg = self.angle_rate_calulator.update(ret.steeringAngleDeg, cp.vl["Steering_Torque"]["COUNTER"])
+
+      ret.steeringTorque = cp.vl["Steering_Torque"]["Steer_Torque_Sensor"]
+      ret.steeringTorqueEps = cp.vl["Steering_Torque"]["Steer_Torque_Output"]
+    else:
+      ret.steeringAngleDeg = cp.vl["Brake_Pressure_L_R"]["Steering_Angle"]
 
     steer_threshold = 75 if self.CP.flags & SubaruFlags.PREGLOBAL else 80
     ret.steeringPressed = abs(ret.steeringTorque) > steer_threshold
@@ -90,13 +119,15 @@ class CarState(CarStateBase):
                         cp.vl["BodyInfo"]["DOOR_OPEN_RL"],
                         cp.vl["BodyInfo"]["DOOR_OPEN_FR"],
                         cp.vl["BodyInfo"]["DOOR_OPEN_FL"]])
-    ret.steerFaultPermanent = cp.vl["Steering_Torque"]["Steer_Error_1"] == 1
+    if not self.CP.flags & SubaruFlags.MANUAL:
+      ret.steerFaultPermanent = cp.vl["Steering_Torque"]["Steer_Error_1"] == 1
 
     if self.CP.flags & SubaruFlags.PREGLOBAL:
       self.cruise_button = cp_cam.vl["ES_Distance"]["Cruise_Button"]
       self.ready = not cp_cam.vl["ES_DashStatus"]["Not_Ready_Startup"]
     else:
-      ret.steerFaultTemporary = cp.vl["Steering_Torque"]["Steer_Warning"] == 1
+      if not self.CP.flags & SubaruFlags.MANUAL:
+        ret.steerFaultTemporary = cp.vl["Steering_Torque"]["Steer_Warning"] == 1
       ret.cruiseState.nonAdaptive = cp_cam.vl["ES_DashStatus"]["Conventional_Cruise"] == 1
       ret.cruiseState.standstill = cp_cam.vl["ES_DashStatus"]["Cruise_State"] == 3
       ret.stockFcw = (cp_cam.vl["ES_LKAS_State"]["LKAS_Alert"] == 1) or \
@@ -122,6 +153,24 @@ class CarState(CarStateBase):
     self.es_dashstatus_msg = copy.copy(cp_cam.vl["ES_DashStatus"])
     if self.CP.flags & SubaruFlags.SEND_INFOTAINMENT:
       self.es_infotainment_msg = copy.copy(cp_cam.vl["ES_Infotainment"])
+
+    # Update manual transmission stats
+    if self.CP.flags & SubaruFlags.MANUAL:
+      throttle_pos = throttle_msg["Throttle_Pedal"] / 255.0  # Normalize to 0-1
+      if self.manual_stats.frame % 1000 == 0:
+        print(f"[MT] frame={self.manual_stats.frame} rpm={ret.engineRpm:.0f} gear={ret.gearActual} speed={ret.vEgo:.1f} throttle={throttle_pos:.2f} clutch={ret.clutchPressed} neutral={ret.inNeutral} lugging={self.manual_stats.is_lugging}", flush=True)
+      self.manual_stats.update(
+        rpm=ret.engineRpm,
+        gear=ret.gearActual,
+        speed=ret.vEgo,
+        accel=ret.aEgo,
+        clutch=ret.clutchPressed,
+        neutral=ret.inNeutral,
+        throttle=throttle_pos,
+      )
+      # Log shift quality and lug state for plotjuggler
+      ret.shiftSmoothness, ret.shiftGrade = self.manual_stats.get_shift_info()
+      ret.isLugging = self.manual_stats.is_lugging
 
     return ret
 
