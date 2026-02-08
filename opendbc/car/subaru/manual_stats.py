@@ -9,14 +9,14 @@ Tracks and analyzes manual driving behavior:
 - Gear prediction from RPM and speed
 - Shift suggestions for economy/performance
 
+All stats are accumulated into one dict (self.stats) and saved periodically.
+Current drive stats are computed as diffs from a snapshot taken at init.
+No end_session() needed - card process gets killed, data is already saved.
+
 Called from Subaru carstate.py on each update.
 """
 
-import json
 import time
-import math
-from dataclasses import dataclass, field, asdict
-from typing import Optional
 from collections import deque
 
 from openpilot.common.params import Params
@@ -39,16 +39,16 @@ BRZ_FINAL_DRIVE = 4.10
 BRZ_TIRE_CIRCUMFERENCE = 1.977  # meters (215/40R18 - Limited trim)
 
 # RPM thresholds for shift suggestions
-ECONOMY_UPSHIFT_RPM = 2500   # Upshift for fuel economy
+ECONOMY_UPSHIFT_RPM = 3200   # BRZ feels good shifting here for economy
 ECONOMY_DOWNSHIFT_RPM = 1500  # Downshift to avoid lugging
 PERFORMANCE_UPSHIFT_RPM = 6500  # Near redline upshift
 PERFORMANCE_DOWNSHIFT_RPM = 4000  # Keep in powerband
 
 # Detection thresholds
 STALL_RPM_THRESHOLD = 300
-LUG_RPM_THRESHOLD = 1500  # BRZ lugs noticeably below this under load
-LUG_LOAD_THRESHOLD = 0.10  # 10% throttle - any meaningful load
-MIN_SPEED_FOR_LUG = 1.5  # m/s (~3.4 mph)
+LUG_RPM_THRESHOLD = 1200  # BRZ actually lugs below ~1200 under meaningful load
+LUG_LOAD_THRESHOLD = 0.25  # 25% throttle - real load, not just maintaining speed
+MIN_SPEED_FOR_LUG = 5.0  # m/s (~11 mph) - ignore very low speed creeping
 LAUNCH_SPEED_THRESHOLD = 0.5  # m/s
 LAUNCH_COMPLETE_SPEED = 5.0  # m/s
 
@@ -61,6 +61,18 @@ OK_DOWNSHIFT_REV_MATCH_TOLERANCE = 500    # RPM
 # Launch smoothness - more forgiving since accel naturally varies during launch
 GOOD_LAUNCH_SMOOTHNESS = 1.5  # m/s^2 std dev - smooth clutch engagement
 OK_LAUNCH_SMOOTHNESS = 2.5    # m/s^2 std dev - acceptable launch
+
+# Save intervals (in frames, each frame = DT_CTRL = 10ms)
+LIVE_SAVE_INTERVAL = 500    # 5s - for onroad widget
+FULL_SAVE_INTERVAL = 3000   # 30s - for historical + session
+
+# Keys in the stats dict that are counters (for drive snapshot diffing)
+COUNTER_KEYS = [
+  'total_stalls', 'total_lugs',
+  'total_upshifts', 'upshifts_good', 'upshifts_ok', 'upshifts_poor',
+  'total_downshifts', 'downshifts_good', 'downshifts_ok', 'downshifts_poor',
+  'total_launches', 'launches_good', 'launches_ok', 'launches_poor', 'launches_stalled',
+]
 
 
 def rpm_for_speed_and_gear(speed_ms: float, gear: int) -> float:
@@ -79,125 +91,58 @@ def speed_for_rpm_and_gear(rpm: float, gear: int) -> float:
   return (rpm * BRZ_TIRE_CIRCUMFERENCE) / (BRZ_FINAL_DRIVE * BRZ_GEAR_RATIOS[gear] * 60)
 
 
-@dataclass
-class DriveSession:
-  start_time: float = 0.0
-  end_time: float = 0.0
-  duration: float = 0.0
-
-  stall_count: int = 0
-  lug_count: int = 0
-  lug_duration_total: float = 0.0
-
-  upshift_count: int = 0
-  upshift_good: int = 0
-  upshift_ok: int = 0
-  upshift_poor: int = 0
-
-  downshift_count: int = 0
-  downshift_good: int = 0
-  downshift_ok: int = 0
-  downshift_poor: int = 0
-
-  launch_count: int = 0
-  launch_good: int = 0
-  launch_ok: int = 0
-  launch_poor: int = 0
-  launch_stalled: int = 0
-
-
-@dataclass
-class SessionSummary:
-  """Summary of a single drive session for history tracking"""
-  timestamp: float = 0.0  # Unix timestamp when session ended
-  duration: float = 0.0  # seconds
-  stalls: int = 0
-  lugs: int = 0
-  upshifts: int = 0
-  upshifts_good: int = 0
-  downshifts: int = 0
-  downshifts_good: int = 0
-  launches: int = 0
-  launches_good: int = 0
-
-  @property
-  def shift_score(self) -> float:
-    """Calculate shift quality score 0-100"""
-    total = self.upshifts + self.downshifts
-    if total == 0:
-      return 100.0
-    good = self.upshifts_good + self.downshifts_good
-    return (good / total) * 100
-
-  @property
-  def stall_rate(self) -> float:
-    """Stalls per 10 minutes of driving"""
-    if self.duration < 60:
-      return 0.0
-    return (self.stalls / self.duration) * 600
-
-
-@dataclass
-class HistoricalStats:
-  total_drives: int = 0
-  total_drive_time: float = 0.0
-
-  total_stalls: int = 0
-  total_lugs: int = 0
-  total_lug_time: float = 0.0
-
-  total_upshifts: int = 0
-  upshifts_good: int = 0
-  upshifts_ok: int = 0
-  upshifts_poor: int = 0
-
-  total_downshifts: int = 0
-  downshifts_good: int = 0
-
-  # Per-gear shift quality tracking (jerk values, lower = smoother)
-  # gear_shifts_into[gear] = [count, total_jerk] for averaging
-  gear_shift_counts: dict = field(default_factory=lambda: {1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0})
-  gear_shift_jerk_totals: dict = field(default_factory=lambda: {1: 0.0, 2: 0.0, 3: 0.0, 4: 0.0, 5: 0.0, 6: 0.0})
-  downshifts_ok: int = 0
-  downshifts_poor: int = 0
-
-  total_launches: int = 0
-  launches_good: int = 0
-  launches_ok: int = 0
-  launches_poor: int = 0
-  launches_stalled: int = 0
-
-  # Per-session history for plotting (keep last 30 sessions)
-  session_history: list = field(default_factory=list)
-
-  # Legacy fields for backward compatibility
-  recent_stall_rates: list = field(default_factory=list)
-  recent_shift_scores: list = field(default_factory=list)
+def _default_stats() -> dict:
+  """Default stats dict with all keys initialized"""
+  return {
+    'total_drives': 0,
+    'total_drive_time': 0.0,
+    'total_stalls': 0,
+    'total_lugs': 0,
+    'total_lug_time': 0.0,
+    'total_upshifts': 0,
+    'upshifts_good': 0,
+    'upshifts_ok': 0,
+    'upshifts_poor': 0,
+    'total_downshifts': 0,
+    'downshifts_good': 0,
+    'downshifts_ok': 0,
+    'downshifts_poor': 0,
+    'total_launches': 0,
+    'launches_good': 0,
+    'launches_ok': 0,
+    'launches_poor': 0,
+    'launches_stalled': 0,
+    # Per-gear shift quality tracking
+    'gear_shift_counts': {str(g): 0 for g in range(1, 7)},
+    'gear_shift_jerk_totals': {str(g): 0.0 for g in range(1, 7)},
+    # Per-session history for plotting (keep last 30 sessions)
+    'session_history': [],
+  }
 
 
 class ManualStatsTracker:
-  """Singleton tracker for manual transmission driving stats"""
+  """Tracker for manual transmission driving stats.
 
-  _instance: Optional['ManualStatsTracker'] = None
-
-  def __new__(cls):
-    if cls._instance is None:
-      cls._instance = super().__new__(cls)
-      cls._instance._initialized = False
-    return cls._instance
+  All stats accumulate directly into self.stats (a flat dict).
+  Current drive counters are computed by diffing against a snapshot taken at init.
+  Saved periodically to Params -- no end_session needed.
+  """
 
   def __init__(self):
-    if self._initialized:
-      return
-    self._initialized = True
-
     self._params = Params()
-    self.historical: HistoricalStats = self._load_historical_stats()
+    self.stats: dict = self._load()
+
+    # This is a new drive -- bump drive count once
+    self.stats['total_drives'] = self.stats.get('total_drives', 0) + 1
+
+    # Snapshot counters at drive start for computing current drive stats
+    self._drive_start: dict = {k: self.stats.get(k, 0) for k in COUNTER_KEYS}
+    self._drive_start_lug_time: float = self.stats.get('total_lug_time', 0.0)
+    self._drive_start_time: float = self.stats.get('total_drive_time', 0.0)
+    self._session_history_idx: int | None = None  # Index of this drive's entry in session_history
 
     # Frame counter - each frame is DT_CTRL (10ms)
     self.frame = 0
-    self.session_start_frame = 0
-    self.session: DriveSession = DriveSession(start_time=0.0)  # Will set duration from frames
 
     # State tracking
     self.prev_rpm = 0.0
@@ -206,7 +151,7 @@ class ManualStatsTracker:
     self.prev_accel = 0.0
     self.prev_throttle = 0.0
 
-    # Acceleration history for jerk calculation (last 0.5s at ~100Hz = 50 frames)
+    # Acceleration history for smoothness calculation (last 0.5s at ~100Hz = 50 frames)
     self.accel_history: deque = deque(maxlen=50)
 
     # Lugging state
@@ -229,122 +174,80 @@ class ManualStatsTracker:
     self.last_shift_frame = 0
     self.gear_before_clutch = 0  # gear when clutch was pressed
 
-    self._live_update_counter = 0
+    self._live_counter = 0
+    self._full_save_counter = 0
 
-  def _load_historical_stats(self) -> HistoricalStats:
-    try:
-      data = self._params.get("ManualDriveStats")
-      if data:
-        stats_dict = json.loads(data)
-        return HistoricalStats(**stats_dict)
-    except Exception:
-      pass
-    return HistoricalStats()
+  def _load(self) -> dict:
+    """Load stats from Params, or return defaults"""
+    data = self._params.get("ManualDriveStats")
+    if data and isinstance(data, dict):
+      # Merge with defaults to ensure all keys exist
+      defaults = _default_stats()
+      defaults.update(data)
+      return defaults
+    return _default_stats()
 
-  def _save_historical_stats(self):
-    """Save historical stats (non-blocking, atomic via temp file + rename)"""
-    try:
-      self._params.put_nonblocking("ManualDriveStats", json.dumps(asdict(self.historical)))
-    except Exception:
-      pass
+  def _save(self):
+    """Save all stats to Params (non-blocking, atomic)"""
+    # Update drive time from frame count
+    self.stats['total_drive_time'] = (self.stats.get('total_drive_time', 0.0)
+                                      - self._drive_start_time
+                                      + self.frame * DT_CTRL)
 
-  def _save_session_stats(self):
-    """Save current session stats (non-blocking, atomic via temp file + rename)"""
-    try:
-      duration_seconds = (self.frame - self.session_start_frame) * DT_CTRL
-      session_dict = {
-        'duration': duration_seconds,
-        'stall_count': self.session.stall_count,
-        'lug_count': self.session.lug_count,
-        'upshift_count': self.session.upshift_count,
-        'upshift_good': self.session.upshift_good,
-        'upshift_ok': self.session.upshift_ok,
-        'upshift_poor': self.session.upshift_poor,
-        'downshift_count': self.session.downshift_count,
-        'downshift_good': self.session.downshift_good,
-        'downshift_ok': self.session.downshift_ok,
-        'downshift_poor': self.session.downshift_poor,
-        'launch_count': self.session.launch_count,
-        'launch_good': self.session.launch_good,
-        'launch_ok': self.session.launch_ok,
-        'launch_poor': self.session.launch_poor,
-        'launch_stalled': self.session.launch_stalled,
-        'timestamp': time.time(),
-      }
-      self._params.put_nonblocking("ManualDriveLastSession", json.dumps(session_dict))
-    except Exception:
-      pass
-
-  def end_session(self):
-    """Finalize session and update historical stats (called by UI when going offroad)"""
-    self.session.duration = (self.frame - self.session_start_frame) * DT_CTRL
-
-    # Only save sessions longer than 30 seconds
-    if self.session.duration < 30:
-      return
-
-    # Update historical stats
-    self.historical.total_drives += 1
-    self.historical.total_drive_time += self.session.duration
-    self.historical.total_stalls += self.session.stall_count
-    self.historical.total_lugs += self.session.lug_count
-    self.historical.total_lug_time += self.session.lug_duration_total
-
-    self.historical.total_upshifts += self.session.upshift_count
-    self.historical.upshifts_good += self.session.upshift_good
-    self.historical.upshifts_ok += self.session.upshift_ok
-    self.historical.upshifts_poor += self.session.upshift_poor
-
-    self.historical.total_downshifts += self.session.downshift_count
-    self.historical.downshifts_good += self.session.downshift_good
-    self.historical.downshifts_ok += self.session.downshift_ok
-    self.historical.downshifts_poor += self.session.downshift_poor
-
-    self.historical.total_launches += self.session.launch_count
-    self.historical.launches_good += self.session.launch_good
-    self.historical.launches_ok += self.session.launch_ok
-    self.historical.launches_poor += self.session.launch_poor
-    self.historical.launches_stalled += self.session.launch_stalled
-
-    # Add session to history for plotting
-    summary = SessionSummary(
-      timestamp=time.time(),
-      duration=self.session.duration,
-      stalls=self.session.stall_count,
-      lugs=self.session.lug_count,
-      upshifts=self.session.upshift_count,
-      upshifts_good=self.session.upshift_good,
-      downshifts=self.session.downshift_count,
-      downshifts_good=self.session.downshift_good,
-      launches=self.session.launch_count,
-      launches_good=self.session.launch_good,
-    )
-    self.historical.session_history.append(asdict(summary))
-    # Keep last 30 sessions
-    if len(self.historical.session_history) > 30:
-      self.historical.session_history.pop(0)
-
-    # Legacy trend tracking (for backward compatibility)
-    self.historical.recent_stall_rates.append(self.session.stall_count)
-    if len(self.historical.recent_stall_rates) > 10:
-      self.historical.recent_stall_rates.pop(0)
-
-    total_shifts = self.session.upshift_count + self.session.downshift_count
-    if total_shifts > 0:
-      good_shifts = self.session.upshift_good + self.session.downshift_good
-      ok_shifts = self.session.upshift_ok + self.session.downshift_ok
-      shift_score = int((good_shifts * 100 + ok_shifts * 50) / total_shifts)
+    # Update current session in session_history (replace last entry for this drive)
+    drive = self.current_drive()
+    session_entry = {
+      'timestamp': time.time(),
+      'duration': self.frame * DT_CTRL,
+      'stalls': drive['stall_count'],
+      'lugs': drive['lug_count'],
+      'upshifts': drive['upshift_count'],
+      'upshifts_good': drive['upshift_good'],
+      'downshifts': drive['downshift_count'],
+      'downshifts_good': drive['downshift_good'],
+      'launches': drive['launch_count'],
+      'launches_good': drive['launch_good'],
+      'launches_stalled': drive['launch_stalled'],
+    }
+    history = self.stats.get('session_history', [])
+    if self._session_history_idx is not None:
+      history[self._session_history_idx] = session_entry
     else:
-      shift_score = 100
+      history.append(session_entry)
+      self._session_history_idx = len(history) - 1
+    # Keep last 30 sessions
+    if len(history) > 30:
+      history.pop(0)
+      self._session_history_idx = len(history) - 1
+    self.stats['session_history'] = history
 
-    self.historical.recent_shift_scores.append(shift_score)
-    if len(self.historical.recent_shift_scores) > 10:
-      self.historical.recent_shift_scores.pop(0)
+    self._params.put_nonblocking("ManualDriveStats", self.stats)
 
-    self._save_session_stats()
-    self._save_historical_stats()
+  def _update_live_stats(self):
+    """Write live stats to Params for the onroad widget"""
+    self._params.put_nonblocking("ManualDriveLiveStats", self.get_live_stats())
 
-  def _calculate_jerk(self) -> float:
+  def current_drive(self) -> dict:
+    """Get current drive's stats by diffing against drive start snapshot"""
+    return {
+      'stall_count': self.stats.get('total_stalls', 0) - self._drive_start.get('total_stalls', 0),
+      'lug_count': self.stats.get('total_lugs', 0) - self._drive_start.get('total_lugs', 0),
+      'upshift_count': self.stats.get('total_upshifts', 0) - self._drive_start.get('total_upshifts', 0),
+      'upshift_good': self.stats.get('upshifts_good', 0) - self._drive_start.get('upshifts_good', 0),
+      'upshift_ok': self.stats.get('upshifts_ok', 0) - self._drive_start.get('upshifts_ok', 0),
+      'upshift_poor': self.stats.get('upshifts_poor', 0) - self._drive_start.get('upshifts_poor', 0),
+      'downshift_count': self.stats.get('total_downshifts', 0) - self._drive_start.get('total_downshifts', 0),
+      'downshift_good': self.stats.get('downshifts_good', 0) - self._drive_start.get('downshifts_good', 0),
+      'downshift_ok': self.stats.get('downshifts_ok', 0) - self._drive_start.get('downshifts_ok', 0),
+      'downshift_poor': self.stats.get('downshifts_poor', 0) - self._drive_start.get('downshifts_poor', 0),
+      'launch_count': self.stats.get('total_launches', 0) - self._drive_start.get('total_launches', 0),
+      'launch_good': self.stats.get('launches_good', 0) - self._drive_start.get('launches_good', 0),
+      'launch_ok': self.stats.get('launches_ok', 0) - self._drive_start.get('launches_ok', 0),
+      'launch_poor': self.stats.get('launches_poor', 0) - self._drive_start.get('launches_poor', 0),
+      'launch_stalled': self.stats.get('launches_stalled', 0) - self._drive_start.get('launches_stalled', 0),
+    }
+
+  def _calculate_smoothness(self) -> float:
     """
     Calculate smoothness metric from acceleration history.
     Returns the standard deviation of acceleration over the last 0.5s -
@@ -360,9 +263,7 @@ class ManualStatsTracker:
     # Standard deviation of acceleration - measures bumpiness
     mean_accel = sum(accels) / len(accels)
     variance = sum((a - mean_accel) ** 2 for a in accels) / len(accels)
-    std_accel = variance ** 0.5
-
-    return std_accel
+    return variance ** 0.5
 
   def update(self, rpm: float, gear: int, speed: float, accel: float, clutch: bool, neutral: bool,
              throttle: float):
@@ -379,10 +280,7 @@ class ManualStatsTracker:
       neutral: True if in neutral
       throttle: Throttle position (0-1)
     """
-    # Increment frame counter
     self.frame += 1
-
-    # Use aEgo from CarState (Kalman filtered, more accurate than computing from speed)
     self.accel_history.append(accel)
 
     # "In gear" means: not in neutral AND clutch not pressed (power transmitting)
@@ -399,16 +297,10 @@ class ManualStatsTracker:
       self.clutch_release_frame = self.frame
       self.clutch_pressed_recently = False
 
-    # Detect stall
+    # Detection
     self._detect_stall(rpm, clutch, neutral)
-
-    # Detect lugging (only when in gear)
     self._detect_lug(rpm, throttle, speed, in_gear)
-
-    # Detect launches
     self._detect_launch(rpm, speed, clutch, neutral)
-
-    # Detect shifts (only when clutch was involved and in gear)
     self._detect_shift(rpm, gear, clutch, neutral)
 
     # Update previous state
@@ -418,30 +310,31 @@ class ManualStatsTracker:
     self.prev_accel = accel
     self.prev_throttle = throttle
 
-    # Periodic saves (every ~500 calls = 5s at 100Hz)
-    self._live_update_counter += 1
-    if self._live_update_counter >= 500:
-      self._live_update_counter = 0
-      self._save_session_stats()
+    # Periodic live stats (every 5s)
+    self._live_counter += 1
+    if self._live_counter >= LIVE_SAVE_INTERVAL:
+      self._live_counter = 0
       self._update_live_stats()
 
+    # Periodic full save (every 30s)
+    self._full_save_counter += 1
+    if self._full_save_counter >= FULL_SAVE_INTERVAL:
+      self._full_save_counter = 0
+      self._save()
+
   def _detect_stall(self, rpm: float, clutch: bool, neutral: bool):
-    """Detect engine stall"""
-    # Stall: RPM drops below threshold (edge detection)
-    # Don't require clutch released - you often press clutch in panic as it stalls
-    # Only require not in neutral (can't stall in neutral)
+    """Detect engine stall - RPM drops below threshold (edge detection)"""
     if rpm < STALL_RPM_THRESHOLD and self.prev_rpm >= STALL_RPM_THRESHOLD:
       if not neutral:
-        self.session.stall_count += 1
+        self.stats['total_stalls'] += 1
 
-        # If we were launching, mark it as stalled
         if self.is_launching:
-          self.session.launch_stalled += 1
-          self.session.launch_count += 1
+          self.stats['launches_stalled'] += 1
+          self.stats['total_launches'] += 1
           self.is_launching = False
 
   def _detect_lug(self, rpm: float, throttle: float, speed: float, in_gear: bool):
-    """Detect engine lugging (only when in gear - not neutral and clutch released)"""
+    """Detect engine lugging (only when in gear)"""
     is_lugging_now = (
       in_gear and
       rpm < LUG_RPM_THRESHOLD and
@@ -452,15 +345,14 @@ class ManualStatsTracker:
     if is_lugging_now and not self.is_lugging:
       self.is_lugging = True
       self.lug_start_frame = self.frame
-      self.session.lug_count += 1
+      self.stats['total_lugs'] += 1
     elif not is_lugging_now and self.is_lugging:
       lug_duration = (self.frame - self.lug_start_frame) * DT_CTRL
-      self.session.lug_duration_total += lug_duration
+      self.stats['total_lug_time'] = self.stats.get('total_lug_time', 0.0) + lug_duration
       self.is_lugging = False
 
   def _detect_launch(self, rpm: float, speed: float, clutch: bool, neutral: bool):
     """Detect and grade launches"""
-    # Start launch when stopped with clutch pressed
     if speed < LAUNCH_SPEED_THRESHOLD and clutch and not self.is_launching:
       self.is_launching = True
       self.launch_start_frame = self.frame
@@ -468,25 +360,21 @@ class ManualStatsTracker:
       self.launch_clutch_released = False
 
     if self.is_launching:
-      # Track clutch release
       if not clutch:
         self.launch_clutch_released = True
 
-      # Track max bumpiness (accel std dev)
-      current_smoothness = self._calculate_jerk()
+      current_smoothness = self._calculate_smoothness()
       self.launch_max_jerk = max(self.launch_max_jerk, current_smoothness)
 
-      # Check for successful launch completion
       if speed >= LAUNCH_COMPLETE_SPEED and self.launch_clutch_released:
-        # Grade the launch based on smoothness during clutch engagement
         if self.launch_max_jerk < GOOD_LAUNCH_SMOOTHNESS:
-          self.session.launch_good += 1
+          self.stats['launches_good'] += 1
         elif self.launch_max_jerk < OK_LAUNCH_SMOOTHNESS:
-          self.session.launch_ok += 1
+          self.stats['launches_ok'] += 1
         else:
-          self.session.launch_poor += 1
+          self.stats['launches_poor'] += 1
 
-        self.session.launch_count += 1
+        self.stats['total_launches'] += 1
         self.is_launching = False
 
   def _detect_shift(self, rpm: float, gear: int, clutch: bool, neutral: bool):
@@ -500,30 +388,33 @@ class ManualStatsTracker:
     # 3. Not in neutral (in_gear)
     # This prevents false positives from gear prediction fluctuations
     frames_since_clutch_release = self.frame - self.clutch_release_frame
-    if frames_since_clutch_release > 100:  # 100 frames = 1 second
-      return  # Too long since clutch release, not a real shift
+    if frames_since_clutch_release > 100:  # 1 second
+      return
 
     if gear != self.gear_before_clutch and self.gear_before_clutch > 0 and not clutch:
       is_upshift = gear > self.gear_before_clutch
-      smoothness = self._calculate_jerk()  # Returns accel std dev - lower is smoother
+      smoothness = self._calculate_smoothness()
 
-      # Track per-gear smoothness for the gear we shifted INTO
-      if 1 <= gear <= 6:
-        self.historical.gear_shift_counts[gear] = self.historical.gear_shift_counts.get(gear, 0) + 1
-        self.historical.gear_shift_jerk_totals[gear] = self.historical.gear_shift_jerk_totals.get(gear, 0.0) + smoothness
+      # Track per-gear smoothness
+      gear_key = str(gear)
+      counts = self.stats.get('gear_shift_counts', {})
+      jerks = self.stats.get('gear_shift_jerk_totals', {})
+      counts[gear_key] = counts.get(gear_key, 0) + 1
+      jerks[gear_key] = jerks.get(gear_key, 0.0) + smoothness
+      self.stats['gear_shift_counts'] = counts
+      self.stats['gear_shift_jerk_totals'] = jerks
 
       if is_upshift:
-        # Grade upshift based on smoothness (accel std dev)
         if smoothness < GOOD_SHIFT_SMOOTHNESS:
           grade = "good"
-          self.session.upshift_good += 1
+          self.stats['upshifts_good'] += 1
         elif smoothness < OK_SHIFT_SMOOTHNESS:
           grade = "ok"
-          self.session.upshift_ok += 1
+          self.stats['upshifts_ok'] += 1
         else:
           grade = "poor"
-          self.session.upshift_poor += 1
-        self.session.upshift_count += 1
+          self.stats['upshifts_poor'] += 1
+        self.stats['total_upshifts'] += 1
         print(f"UPSHIFT {self.gear_before_clutch}->{gear}: smoothness={smoothness:.2f} m/s^2, grade={grade}, speed={self.prev_speed:.1f}")
       else:
         # Grade downshift - primarily on rev matching, smoothness as secondary
@@ -536,14 +427,14 @@ class ManualStatsTracker:
         # Poor: bad rev-match
         if rpm_match_error < GOOD_DOWNSHIFT_REV_MATCH_TOLERANCE and smoothness < GOOD_SHIFT_SMOOTHNESS:
           grade = "good"
-          self.session.downshift_good += 1
+          self.stats['downshifts_good'] += 1
         elif rpm_match_error < OK_DOWNSHIFT_REV_MATCH_TOLERANCE or (rpm_match_error < GOOD_DOWNSHIFT_REV_MATCH_TOLERANCE and smoothness < OK_SHIFT_SMOOTHNESS):
           grade = "ok"
-          self.session.downshift_ok += 1
+          self.stats['downshifts_ok'] += 1
         else:
           grade = "poor"
-          self.session.downshift_poor += 1
-        self.session.downshift_count += 1
+          self.stats['downshifts_poor'] += 1
+        self.stats['total_downshifts'] += 1
         print(f"DOWNSHIFT {self.gear_before_clutch}->{gear}: smoothness={smoothness:.2f}, rpm={rpm:.0f}, target_rpm={target_rpm:.0f}, rpm_err={rpm_match_error:.0f}, speed={self.prev_speed:.1f}, grade={grade}")
 
       # Store shift info for CarState logging
@@ -551,15 +442,12 @@ class ManualStatsTracker:
       self.last_shift_grade = 1 if grade == "good" else (2 if grade == "ok" else 3)
       self.last_shift_frame = self.frame
 
-      # Reset so we don't double-count this shift
+      # Reset so we don't double-count
       self.clutch_release_frame = 0
       self.gear_before_clutch = 0
 
   def predict_gear(self, rpm: float, speed_ms: float) -> int:
-    """
-    Predict current gear from RPM and speed using BRZ gear ratios.
-    Returns gear 1-6, or 0 if unable to determine (stopped, neutral, etc.)
-    """
+    """Predict current gear from RPM and speed using BRZ gear ratios."""
     if rpm < 500 or speed_ms < 0.5:
       return 0  # Engine off, idling, or stopped
 
@@ -643,33 +531,26 @@ class ManualStatsTracker:
     return (0.0, 0)
 
   def get_live_stats(self) -> dict:
-    """Get current session stats for live display"""
-    # Get shift suggestion
+    """Get current drive stats for the onroad widget"""
+    drive = self.current_drive()
     suggestion = self.get_shift_suggestion(self.prev_rpm, self.prev_gear, self.prev_throttle)
 
     return {
-      'stalls': self.session.stall_count,
-      'lugs': self.session.lug_count,
-      'shifts': self.session.upshift_count + self.session.downshift_count,
-      'good_shifts': self.session.upshift_good + self.session.downshift_good,
-      'launches': self.session.launch_count,
-      'good_launches': self.session.launch_good,
+      'stalls': drive['stall_count'],
+      'lugs': drive['lug_count'],
+      'shifts': drive['upshift_count'] + drive['downshift_count'],
+      'good_shifts': drive['upshift_good'] + drive['downshift_good'],
+      'launches': drive['launch_count'],
+      'good_launches': drive['launch_good'],
       'is_lugging': self.is_lugging,
       'gear': self.prev_gear,
       'shift_suggestion': suggestion['action'],
       'shift_reason': suggestion['reason'],
     }
 
-  def _update_live_stats(self):
-    """Write live stats to Params for UI display"""
-    try:
-      self._params.put_nonblocking("ManualDriveLiveStats", self.get_live_stats())
-    except Exception:
-      pass
 
-
-# Global instance
-_tracker: Optional[ManualStatsTracker] = None
+# Module-level singleton
+_tracker = None
 
 
 def get_tracker() -> ManualStatsTracker:
