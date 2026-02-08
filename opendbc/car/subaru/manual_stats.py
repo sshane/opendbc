@@ -16,10 +16,12 @@ No end_session() needed - card process gets killed, data is already saved.
 Called from Subaru carstate.py on each update.
 """
 
+import math
 import time
 from collections import deque
 
 from openpilot.common.params import Params
+from openpilot.common.time_helpers import system_time_valid
 from opendbc.car import DT_CTRL
 
 
@@ -64,7 +66,7 @@ OK_LAUNCH_SMOOTHNESS = 2.5    # m/s^2 std dev - acceptable launch
 
 # Save intervals (in frames, each frame = DT_CTRL = 10ms)
 LIVE_SAVE_INTERVAL = 500    # 5s - for onroad widget
-FULL_SAVE_INTERVAL = 3000   # 30s - for historical + session
+FULL_SAVE_INTERVAL = 1500   # 15s - for historical + session
 
 # Keys in the stats dict that are counters (for drive snapshot diffing)
 COUNTER_KEYS = [
@@ -190,14 +192,12 @@ class ManualStatsTracker:
   def _save(self):
     """Save all stats to Params (non-blocking, atomic)"""
     # Update drive time from frame count
-    self.stats['total_drive_time'] = (self.stats.get('total_drive_time', 0.0)
-                                      - self._drive_start_time
-                                      + self.frame * DT_CTRL)
+    self.stats['total_drive_time'] = self._drive_start_time + self.frame * DT_CTRL
 
     # Update current session in session_history (replace last entry for this drive)
     drive = self.current_drive()
     session_entry = {
-      'timestamp': time.time(),
+      'timestamp': time.time() if system_time_valid() else math.nan,
       'duration': self.frame * DT_CTRL,
       'stalls': drive['stall_count'],
       'lugs': drive['lug_count'],
@@ -327,6 +327,9 @@ class ManualStatsTracker:
     if rpm < STALL_RPM_THRESHOLD and self.prev_rpm >= STALL_RPM_THRESHOLD:
       if not neutral:
         self.stats['total_stalls'] += 1
+
+        # Save immediately so stall isn't lost if card gets killed
+        self._save()
 
         if self.is_launching:
           self.stats['launches_stalled'] += 1
