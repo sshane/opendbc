@@ -543,6 +543,7 @@ class ManualStatsTracker:
       'launches': drive['launch_count'],
       'good_launches': drive['launch_good'],
       'is_lugging': self.is_lugging,
+      'is_launching': self.is_launching,
       'gear': self.prev_gear,
       'shift_suggestion': suggestion['action'],
       'shift_reason': suggestion['reason'],
