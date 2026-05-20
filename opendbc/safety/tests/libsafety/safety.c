@@ -11,6 +11,7 @@ uint32_t microsecond_timer_get(void) {
 
 #include "opendbc/safety/can.h"
 #include "opendbc/safety/safety.h"
+#include "opendbc/safety/ignition.h"
 
 void safety_tick_current_safety_config() {
   safety_tick(&current_safety_config);
@@ -26,7 +27,7 @@ bool safety_config_valid() {
     const RxCheck addr = current_safety_config.rx_checks[i];
     bool valid = addr.status.msg_seen && !addr.status.lagging && addr.status.valid_checksum && (addr.status.wrong_counters < MAX_WRONG_COUNTERS) && addr.status.valid_quality_flag;
     if (!valid) {
-      // printf("i %d seen %d lagging %d valid checksum %d wrong counters %d valid quality flag %d\n", i, addr.status.msg_seen, addr.status.lagging, addr.status.valid_checksum, addr.status.wrong_counters, addr.status.valid_quality_flag);
+      printf("i %d seen %d lagging %d valid checksum %d wrong counters %d valid quality flag %d\n", i, addr.status.msg_seen, addr.status.lagging, addr.status.valid_checksum, addr.status.wrong_counters, addr.status.valid_quality_flag);
       return false;
     }
   }
@@ -45,8 +46,16 @@ void set_relay_malfunction(bool c){
   relay_malfunction = c;
 }
 
+void set_ignition_can(bool c){
+  ignition_can = c;
+}
+
 bool get_controls_allowed(void){
   return controls_allowed;
+}
+
+bool get_ignition_can(void){
+  return ignition_can;
 }
 
 int get_alternative_experience(void){
@@ -201,4 +210,7 @@ void init_tests(void){
 
   // assumes autopark on safety mode init to avoid a fault. get rid of that for testing
   tesla_autopark = false;
+
+  ignition_can = false;
+  ignition_can_cnt = 0U;
 }

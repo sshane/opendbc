@@ -57,6 +57,7 @@ FW_VERSIONS = {
       b'\xa1  \x02\x02',
       b'\xa1  \x03\x02',
       b'\xa1  \x03\x03',
+      b'\xa1  \x04\x00',
       b'\xa1  \x04\x01',
       b'\xa1  \x04\x02',
     ],
@@ -65,10 +66,12 @@ FW_VERSIONS = {
       b'\x9b\xc0\x11\x02',
     ],
     (Ecu.fwdCamera, 0x787, None): [
+      b'\x00\x00eJ\x00\x1f@ \x19\x00',
       b'\x00\x00e\x80\x00\x1f@ \x19\x00',
       b'\x00\x00e\x9a\x00\x00\x00\x00\x00\x00',
     ],
     (Ecu.engine, 0x7e0, None): [
+      b'\xbc"a@\x07',
       b'\xde"a0\x07',
       b'\xde,\xa0@\x07',
       b'\xe2"a0\x07',
@@ -146,6 +149,7 @@ FW_VERSIONS = {
       b'\xc5!ap\x07',
       b'\xc5!ar\x07',
       b'\xc5!as\x07',
+      b'\xc5!au\x07',
       b'\xc5!dr\x07',
       b'\xc5!ds\x07',
       b'\xca\x01b0\x07',
@@ -307,6 +311,11 @@ FW_VERSIONS = {
     ],
     (Ecu.transmission, 0x7e1, None): [
       b'\x1b\xa7@a\x00',
+    ],
+  },
+  CAR.SUBARU_BRZ_6MT_2024: {
+    (Ecu.fwdCamera, 0x787, None): [
+      b'\x00\x00e\xb4\x00\x00\x00\x00\x00\x00',
     ],
   },
   CAR.SUBARU_FORESTER_PREGLOBAL: {
