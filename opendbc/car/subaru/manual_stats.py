@@ -221,11 +221,11 @@ class ManualStatsTracker:
       self._session_history_idx = len(history) - 1
     self.stats['session_history'] = history
 
-    self._params.put_nonblocking("ManualDriveStats", self.stats)
+    self._params.put("ManualDriveStats", self.stats)
 
   def _update_live_stats(self):
     """Write live stats to Params for the onroad widget"""
-    self._params.put_nonblocking("ManualDriveLiveStats", self.get_live_stats())
+    self._params.put("ManualDriveLiveStats", self.get_live_stats())
 
   def current_drive(self) -> dict:
     """Get current drive's stats by diffing against drive start snapshot"""
