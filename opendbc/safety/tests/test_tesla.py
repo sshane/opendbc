@@ -4,8 +4,7 @@ import unittest
 import numpy as np
 
 from opendbc.car.lateral import get_max_angle_delta_vm, get_max_angle_vm
-from opendbc.car.tesla.teslacan import get_steer_ctrl_type
-from opendbc.car.tesla.values import CarControllerParams, TeslaSafetyFlags, TeslaFlags
+from opendbc.car.tesla.values import CarControllerParams, TeslaSafetyFlags
 from opendbc.car.tesla.carcontroller import get_safety_CP
 from opendbc.car.structs import CarParams
 from opendbc.car.vehicle_model import VehicleModel
@@ -77,11 +76,7 @@ class TestTeslaSafetyBase(common.CarSafetyTest, common.AngleSteeringSafetyTest, 
     self.safety.init_tests()
 
   def _angle_cmd_msg(self, angle: float, state: bool | int, increment_timer: bool = True, bus: int = 0):
-    # If FSD 14, translate steer control type to new flipped definition
-    if self.safety.get_current_safety_param() & TeslaSafetyFlags.FSD_14:
-      state = get_steer_ctrl_type(TeslaFlags.FSD_14, int(state))
-
-    values = {"DAS_steeringAngleRequest": angle, "DAS_steeringControlType": state}
+    values = {"DAS_steeringAngleRequest": angle, "DAS_steeringControlType": int(state)}
     if increment_timer:
       self.safety.set_timer(self.cnt_angle_cmd * int(1e6 / self.LATERAL_FREQUENCY))
       self.__class__.cnt_angle_cmd += 1
@@ -270,9 +265,9 @@ class TestTeslaSafetyBase(common.CarSafetyTest, common.AngleSteeringSafetyTest, 
       self.assertEqual(self.LONGITUDINAL, self._tx(self._long_control_msg(0, acc_state=self.acc_states["ACC_ON"])))
 
   def test_steering_control_type(self):
-    # Only angle control is allowed (no LANE_KEEP_ASSIST or EMERGENCY_LANE_KEEP)
+    # Only angle control is allowed (no LANE_KEEP_ASSIST, EMERGENCY_LANE_KEEP, or FSD)
     self.safety.set_controls_allowed(True)
-    for steer_control_type in range(4):
+    for steer_control_type in range(8):
       should_tx = steer_control_type in (self.steer_control_types["NONE"],
                                          self.steer_control_types["ANGLE_CONTROL"])
       self.assertEqual(should_tx, self._tx(self._angle_cmd_msg(0, state=steer_control_type)))
@@ -400,10 +395,6 @@ class TestTeslaStockSafety(TestTeslaSafetyBase):
     self.assertFalse(self._tx(no_aeb_msg))
 
 
-class TestTeslaFSD14StockSafety(TestTeslaStockSafety):
-  SAFETY_PARAM = TeslaSafetyFlags.FSD_14
-
-
 class TestTeslaLongitudinalSafety(TestTeslaSafetyBase):
   SAFETY_PARAM = TeslaSafetyFlags.LONG_CONTROL
 
@@ -452,8 +443,35 @@ class TestTeslaLongitudinalSafety(TestTeslaSafetyBase):
     self.assertFalse(self._tx(self._long_control_msg(set_speed=0, accel_limits=(-0.1, -0.1))))
 
 
-class TestTeslaFSD14LongitudinalSafety(TestTeslaLongitudinalSafety):
-  SAFETY_PARAM = TeslaSafetyFlags.LONG_CONTROL | TeslaSafetyFlags.FSD_14
+class TestTeslaIgnition(unittest.TestCase):
+  TX_MSGS: list = []
+
+  def setUp(self):
+    self.safety = libsafety_py.libsafety
+    self.safety.init_tests()
+    self.packer = CANPackerSafety("tesla_model3_party")
+
+  def _msg(self, counter, state):
+    return self.packer.make_can_msg_safety("VCFRONT_LVPowerState", 0,
+                                           {"VCFRONT_LVPowerStateCounter": counter,
+                                            "VCFRONT_vehiclePowerState": state})
+
+  # VEHICLE_POWER_STATE_DRIVE=3 (counter-gated)
+  def test_ignition_on(self):
+    for i in range(16):
+      self.safety.init_tests()
+      self.safety.ignition_can_hook(self._msg(i, 3))
+      self.assertFalse(self.safety.get_ignition_can())
+      self.safety.ignition_can_hook(self._msg((i + 1) % 16, 3))
+      self.assertTrue(self.safety.get_ignition_can())
+
+  def test_ignition_off(self):
+    self.safety.ignition_can_hook(self._msg(0, 3))
+    self.safety.ignition_can_hook(self._msg(1, 3))
+    self.assertTrue(self.safety.get_ignition_can())
+    self.safety.ignition_can_hook(self._msg(2, 2))
+    self.safety.ignition_can_hook(self._msg(3, 2))
+    self.assertFalse(self.safety.get_ignition_can())
 
 
 if __name__ == "__main__":

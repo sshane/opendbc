@@ -57,12 +57,14 @@ class SubaruSafetyFlags(IntFlag):
   GEN2 = 1
   LONG = 2
   PREGLOBAL_REVERSED_DRIVER_TORQUE = 4
+  MANUAL = 8
 
 
 class SubaruFlags(IntFlag):
   # Detected flags
   SEND_INFOTAINMENT = 1
   DISABLE_EYESIGHT = 2
+  HAS_BSM = 128  # blind spot monitoring
 
   # Static flags
   GLOBAL_GEN2 = 4
@@ -73,6 +75,7 @@ class SubaruFlags(IntFlag):
   PREGLOBAL = 16
   HYBRID = 32
   LKAS_ANGLE = 64
+  MANUAL = 128  # ACC but no steering
 
 
 GLOBAL_ES_ADDR = 0x787
@@ -170,6 +173,11 @@ class CAR(Platforms):
     SUBARU_FORESTER.specs,
     flags=SubaruFlags.HYBRID,
   )
+  SUBARU_BRZ_6MT_2024 = SubaruGen2PlatformConfig(
+    [SubaruCarDocs("Subaru BRZ 6MT 2024", "All")],
+    CarSpecs(mass=1300, wheelbase=2.57, steerRatio=13.5),
+    flags=SubaruFlags.MANUAL,
+  )
   # Pre-global
   SUBARU_FORESTER_PREGLOBAL = SubaruPlatformConfig(
     [SubaruCarDocs("Subaru Forester 2017-18")],
@@ -226,6 +234,7 @@ SUBARU_ALT_VERSION_RESPONSE = bytes([uds.SERVICE_TYPE.READ_DATA_BY_IDENTIFIER + 
   p16(0xf100)
 
 FW_QUERY_CONFIG = FwQueryConfig(
+  fw_version_regex=br"(?:[\x00-\xff]{4,5}|[\x00-\xff]{8}|[\x00-\xff]{10})",
   requests=[
     Request(
       [StdQueries.TESTER_PRESENT_REQUEST, SUBARU_VERSION_REQUEST],
@@ -273,7 +282,7 @@ FW_QUERY_CONFIG = FwQueryConfig(
   ],
   # We don't get the EPS from non-OBD queries on GEN2 cars. Note that we still attempt to match when it exists
   non_essential_ecus={
-    Ecu.eps: list(CAR.with_flags(SubaruFlags.GLOBAL_GEN2)),
+    Ecu.eps: [c for c in CAR if c.config.flags & SubaruFlags.GLOBAL_GEN2],
   }
 )
 
