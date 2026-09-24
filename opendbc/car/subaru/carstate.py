@@ -83,7 +83,10 @@ class CarState(CarStateBase):
       # if ret.inNeutral:
       #   ret.gearShifter = structs.CarState.GearShifter.neutral
       # else:
-      ret.gearShifter = structs.CarState.GearShifter.drive
+      if cp.vl["BSD_RCTA"]["REVERSE"]:
+        ret.gearShifter = structs.CarState.GearShifter.reverse
+      else:
+        ret.gearShifter = structs.CarState.GearShifter.drive
 
     # Steering
     if not self.CP.flags & SubaruFlags.MANUAL:
