@@ -1,9 +1,12 @@
 import copy
 from opendbc.can import CANParser
-from opendbc.car import Bus, structs
+from opendbc.car import DT_CTRL, Bus, structs
 from opendbc.car.interfaces import CarStateBase
 from opendbc.car.rivian.values import DBC, GEAR_MAP
 from opendbc.car.common.conversions import Conversions as CV
+
+# ToiFlt has been seen set for up to ~8 s after a car start; longer than this is a real fault
+TOI_FAULT_TIMEOUT = 15.  # s
 
 GearShifter = structs.CarState.GearShifter
 
@@ -16,6 +19,10 @@ class CarState(CarStateBase):
     self.acm_lka_hba_cmd = None
     self.sccm_wheel_touch = None
     self.vdm_adas_status = None
+
+    self.toi_fault = False
+    self.toi_active_prev = False
+    self.toi_fault_frames = 0
 
   def update(self, can_parsers) -> structs.CarState:
     cp = can_parsers[Bus.pt]
@@ -43,7 +50,14 @@ class CarState(CarStateBase):
     ret.steeringTorque = cp.vl["EPAS_SystemStatus"]["EPAS_TorsionBarTorque"]
     ret.steeringPressed = self.update_steering_pressed(abs(ret.steeringTorque) > 1.0, 5)
 
-    ret.steerFaultTemporary = cp.vl["EPAS_AdasStatus"]["EPAS_EacErrorCode"] != 0
+    # ToiFlt is also set for several seconds after the car starts and blips while not steering.
+    # Fault if it begins while the EPS was accepting torque or stays set too long, otherwise just block engagement
+    toi_fault = cp.vl["EPAS_SystemStatus"]["H_CAN_EPSS_ToiFlt"] != 0
+    self.toi_fault_frames = self.toi_fault_frames + 1 if toi_fault else 0
+    self.toi_fault = toi_fault and (self.toi_fault or self.toi_active_prev or self.toi_fault_frames * DT_CTRL > TOI_FAULT_TIMEOUT)
+    self.toi_active_prev = cp.vl["EPAS_SystemStatus"]["H_CAN_EPSS_ToiActive"] == 1
+    ret.carNotReady = toi_fault
+    ret.steerFaultTemporary = cp.vl["EPAS_AdasStatus"]["EPAS_EacErrorCode"] != 0 or self.toi_fault
 
     # Cruise state
     speed = min(int(cp_adas.vl["ACM_tsrCmd"]["ACM_tsrSpdDisClsMain"]), 85)
